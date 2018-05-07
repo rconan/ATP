@@ -1,0 +1,183 @@
+
+\section{Introduction}
+\label{sec:introduction}
+
+\section{Installation}
+\label{sec:installation}
+
+\section{Implementation}
+\label{sec:implementation}
+
+\section{Observation}
+\label{sec:observation}
+
+<<Observation config>>=
+Observation:
+   time: '2018-01-01T00:00:00'
+   time resolution: [1,'second']
+@ 
+\section{The Observatory}
+\label{sec:gmt}
+
+<<Observatory config>>=
+Observatory:
+   latitude: [-29.049,'degree']
+   longitude:  [-70.682,'degree']
+   height: [2514,'meter']
+   pointing target: null
+   pointing ra/dec: null
+   pointing alt/az:
+      alt: [45,'degree']
+      az: [0,'degree']
+   pointing accuracy: null
+@
+<<observatory>>=
+class Observatory:
+    def __init__(self):
+        self.location = EarthLocation(lat=Quantity(*cfg['Observatory']['latitude']),
+                                      lon=Quantity(*cfg['Observatory']['longitude']),
+                                      height=Quantity(*cfg['Observatory']['height']))
+        self.time = Time(cfg['Observation']['time'])
+        print("@(Observatory)> Time:", Time(self.time, format='isot'))
+        if self.time is None:
+            self.time = Time(datetime.now())
+        self.time_resolution = Quantity(*cfg['Observation']['time resolution'])
+        
+    def update(self):
+        self.time += self.time_resolution
+
+    @property
+    def frame(self):
+        return AltAz(obstime=self.time,
+                     location=self.location)
+@ 
+\section{Target}
+\label{sec:target}
+
+The target defines the direction the telescope is pointing at.
+The target is given by either the name of an astronomical object or sky coordinates in ra/dec or alt/az.
+<<target>>=
+class Target:
+    def __init__(self):
+        if cfg['Observatory']['pointing target'] is not None:
+            self.icrs  = SkyCoord.from_name(cfg['Observatory']['pointing target'], frame='icrs')
+            self.altaz = self.icrs.transform_to( obs.frame() )
+        if cfg['Observatory']['pointing ra/dec'] is not None:
+            self.icrs  = SkyCoord(ra=Quantity(*cfg['Observatory']['pointing ra/dec']['ra']),
+                                  dec=Quantity(*cfg['Observatory']['pointing ra/dec']['dec']),
+                                  frame='icrs')
+            self.altaz = self.icrs.transform_to( obs.frame )
+        if cfg['Observatory']['pointing alt/az'] is not None:
+            self.altaz = SkyCoord(alt=Quantity(*cfg['Observatory']['pointing alt/az']['alt']),
+                                  az=Quantity(*cfg['Observatory']['pointing alt/az']['az']),
+                                  frame = obs.frame)
+            self.icrs  = self.altaz.transform_to( ICRS() )
+        print("@(Target)>")
+        print(self.icrs)
+        print(self.altaz)
+
+    def update(self):
+        self.altaz = self.icrs.transform_to( obs.frame )
+        
+@    
+\section{AGWS Star Field}
+\label{sec:star-field}
+
+An AGWS star field is read from the TESS Input Catalogue (TIC\footnote{\url{https://tess.mit.edu/data/tess-input-catalogue/}}).
+A 10 arcmin radius circular region is queried from the catalogue centered on either a given target or a given sky alt/az coordinate.
+An observation date and time must also be specified, the default is the current date and time.
+The data is further reduced to the objects that have both a magnitude in R and J bands.
+<<module imports>>=
+import numpy as np
+from astroquery.mast import Catalogs
+import astropy.units as units
+from astropy.units import Quantity
+from astropy.time import Time
+from astropy.coordinates import SkyCoord, EarthLocation, ICRS, AltAz
+@ 
+<<star field>>=
+def Rz(c):
+    return np.array([[np.cos(c),np.sin(c),0],[-np.sin(c),np.cos(c),0],[0,0,1]])
+def Ry(b):
+    return np.array([[np.cos(b),0,-np.sin(b)],[0,1,0],[np.sin(b),0,np.cos(b)]])
+class StarField:
+    def __init__(self,target):
+        radius = Quantity(10,units.arcminute)
+        print("@(StarField)> Querying TIC ...")
+        self.target = target
+        catalogData = Catalogs.query_region(target.icrs, radius=radius,
+                                            catalog="TIC",objType="STAR")
+        print('@(StarField)> Catalog entry #',len(catalogData))
+        Rmag = np.array(catalogData['rmag'])
+        Jmag = np.array(catalogData['Jmag'])
+        mask = np.logical_and(~np.isnan(Rmag),~np.isnan(Jmag))
+        n = mask.sum()
+        print('@(StarField)> Entries with both R and J magnitude #',n)
+        self.R = Rmag[mask]
+        self.J = Jmag[mask]
+        if n>0:
+            print('@(StarField)> R magnitude range [{0},{1}]'.format(self.R.min(),self.R.max()))
+            print('@(StarField)> J magnitude range [{0},{1}]'.format(self.J.min(),self.J.max()))
+            data = catalogData[mask]
+            self.icrs = SkyCoord(ra=data['ra']*units.deg,
+                                 dec=data['dec']*units.deg,
+                                 frame='icrs')
+            self.update()
+
+    def update(self):
+        self.altaz = self.icrs.transform_to( obs.frame )
+        cra = np.cos(self.altaz.az.to(units.rad))
+        sra = np.sin(self.altaz.az.to(units.rad))
+        cdec = np.cos(self.altaz.alt.to(units.rad))
+        sdec = np.sin(self.altaz.alt.to(units.rad))
+        x = cra*cdec
+        y = sra*cdec
+        z = sdec
+        R = Ry(np.pi/2*units.rad-target.altaz.alt.to(units.rad)) @ \
+            Rz(target.altaz.az.to(units.rad))
+        v = np.array(np.vstack([x,y,z]))
+        self.local = R @ v              
+@
+<<Star field config>>=
+STAR CATALOG:
+   ra/dec error rms: null
+@
+The  
+\section{Files}
+\label{sec:files}
+
+The main python module is
+<<atp.py>>=
+<<module imports>>
+from datetime import datetime
+<<observatory>>
+<<target>>
+<<star field>>
+
+if __name__ == "__main__":
+
+    <<reading the atp config file>>
+    obs = Observatory()
+    target = Target()
+    stars  = StarField(target)
+@ %def observatory
+
+\subsection{Configuration}
+\label{sec:config}
+
+<<atp.yml>>=
+<<Observation config>>
+<<Observatory config>>
+<<Star field config>>
+@
+The configuration file is read with:
+<<module imports>>=
+import yaml
+@
+<<reading the atp config file>>=
+with open('atp.yml') as fp:
+    cfg = yaml.load(fp)
+@ %def cfg
+    
+
+
