@@ -60,7 +60,8 @@ The target is given by either the name of an astronomical object or sky coordina
 class Target:
     def __init__(self):
         if cfg['Observatory']['pointing target'] is not None:
-            self.icrs  = SkyCoord.from_name(cfg['Observatory']['pointing target'], frame='icrs')
+            self.icrs  = SkyCoord.from_name(cfg['Observatory']['pointing target'],
+                                            frame='icrs')
             self.altaz = self.icrs.transform_to( obs.frame() )
         if cfg['Observatory']['pointing ra/dec'] is not None:
             self.icrs  = SkyCoord(ra=Quantity(*cfg['Observatory']['pointing ra/dec']['ra']),
@@ -165,7 +166,7 @@ if __name__ == "__main__":
 \subsection{Configuration}
 \label{sec:config}
 
-<<atp.yml>>=
+<<atp.yaml>>=
 <<Observation config>>
 <<Observatory config>>
 <<Star field config>>
@@ -175,7 +176,7 @@ The configuration file is read with:
 import yaml
 @
 <<reading the atp config file>>=
-with open('atp.yml') as fp:
+with open('atp.yaml') as fp:
     cfg = yaml.load(fp)
 @ %def cfg
     

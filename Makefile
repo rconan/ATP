@@ -11,7 +11,7 @@ python: atp.nw atp.py
 doc: atp.nw atp.tex
 	make -C doc/ all
 
-.SUFFIXES: .nw .tex .py .yml
+.SUFFIXES: .nw .tex .py .yaml
 
 .nw.tex:
 	$(WEAVE) -delay -index $< > doc/$@
@@ -19,5 +19,5 @@ doc: atp.nw atp.tex
 .nw.py:
 	$(TANGLE) -R$@ $< > $@
 
-.nw.yml:
+.nw.yaml:
 	$(TANGLE) -R$@ $< > $@
