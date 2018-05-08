@@ -4,20 +4,22 @@ TANGLE    	= $(NOWEBPATH)/bin/notangle
 
 all: yaml python doc
 
-yaml: atp.nw atp.yml
+yaml: atp.nwy atp.yaml
 
-python: atp.nw atp.py
+python: atp.nwy atp.py
+	$(TANGLE) -Rmain.py atp.nwy > main.py
 
-doc: atp.nw atp.tex
+doc: atp.nwy atp.tex
 	make -C doc/ all
 
-.SUFFIXES: .nw .tex .py .yaml
+.SUFFIXES: .nwy .tex .py .yaml
 
-.nw.tex:
+.nwy.tex:
 	$(WEAVE) -delay -index $< > doc/$@
 
-.nw.py:
+.nwy.py:
 	$(TANGLE) -R$@ $< > $@
 
-.nw.yaml:
+.nwy.yaml:
 	$(TANGLE) -R$@ $< > $@
+ 	

@@ -14,7 +14,7 @@
 <<Observation config>>=
 Observation:
    time: '2018-01-01T00:00:00'
-   time resolution: [1,'second']
+   time resolution: [60,'second']
 @ 
 \section{The Observatory}
 \label{sec:gmt}
@@ -33,7 +33,7 @@ Observatory:
 @
 <<observatory>>=
 class Observatory:
-    def __init__(self):
+    def __init__(self,cfg):
         self.location = EarthLocation(lat=Quantity(*cfg['Observatory']['latitude']),
                                       lon=Quantity(*cfg['Observatory']['longitude']),
                                       height=Quantity(*cfg['Observatory']['height']))
@@ -50,7 +50,8 @@ class Observatory:
     def frame(self):
         return AltAz(obstime=self.time,
                      location=self.location)
-@ 
+@ %def Observatory
+
 \section{Target}
 \label{sec:target}
 
@@ -58,14 +59,14 @@ The target defines the direction the telescope is pointing at.
 The target is given by either the name of an astronomical object or sky coordinates in ra/dec or alt/az.
 <<target>>=
 class Target:
-    def __init__(self):
+    def __init__(self,cfg,obs):
         if cfg['Observatory']['pointing target'] is not None:
             self.icrs  = SkyCoord.from_name(cfg['Observatory']['pointing target'],
                                             frame='icrs')
             self.altaz = self.icrs.transform_to( obs.frame() )
         if cfg['Observatory']['pointing ra/dec'] is not None:
             self.icrs  = SkyCoord(ra=Quantity(*cfg['Observatory']['pointing ra/dec']['ra']),
-                                  dec=Quantity(*cfg['Observatory']['pointing ra/dec']['dec']),
+                                  dec=Quantity(*cfg['Obs change mode keyervatory']['pointing ra/dec']['dec']),
                                   frame='icrs')
             self.altaz = self.icrs.transform_to( obs.frame )
         if cfg['Observatory']['pointing alt/az'] is not None:
@@ -77,17 +78,17 @@ class Target:
         print(self.icrs)
         print(self.altaz)
 
-    def update(self):
+    def update(self,obs):
         self.altaz = self.icrs.transform_to( obs.frame )
-        
-@    
+@ %def Target
+
 \section{AGWS Star Field}
 \label{sec:star-field}
 
 An AGWS star field is read from the TESS Input Catalogue (TIC\footnote{\url{https://tess.mit.edu/data/tess-input-catalogue/}}).
 A 10 arcmin radius circular region is queried from the catalogue centered on either a given target or a given sky alt/az coordinate.
 An observation date and time must also be specified, the default is the current date and time.
-The data is further reduced to the objects that have both a magnitude in R and J bands.
+The data is further reduced to objects that have both a magnitude in R and J bands.
 <<module imports>>=
 import numpy as np
 from astroquery.mast import Catalogs
@@ -102,7 +103,7 @@ def Rz(c):
 def Ry(b):
     return np.array([[np.cos(b),0,-np.sin(b)],[0,1,0],[np.sin(b),0,np.cos(b)]])
 class StarField:
-    def __init__(self,target):
+    def __init__(self,obs,target):
         radius = Quantity(10,units.arcminute)
         print("@(StarField)> Querying TIC ...")
         self.target = target
@@ -123,9 +124,9 @@ class StarField:
             self.icrs = SkyCoord(ra=data['ra']*units.deg,
                                  dec=data['dec']*units.deg,
                                  frame='icrs')
-            self.update()
+            self.update(obs)
 
-    def update(self):
+    def update(self,obs):
         self.altaz = self.icrs.transform_to( obs.frame )
         cra = np.cos(self.altaz.az.to(units.rad))
         sra = np.sin(self.altaz.az.to(units.rad))
@@ -134,16 +135,72 @@ class StarField:
         x = cra*cdec
         y = sra*cdec
         z = sdec
-        R = Ry(np.pi/2*units.rad-target.altaz.alt.to(units.rad)) @ \
-            Rz(target.altaz.az.to(units.rad))
+        R = Ry(np.pi/2*units.rad-self.target.altaz.alt.to(units.rad)) @ \
+            Rz(self.target.altaz.az.to(units.rad))
         v = np.array(np.vstack([x,y,z]))
         self.local = R @ v              
-@
+@ %def StarField
 <<Star field config>>=
 STAR CATALOG:
    ra/dec error rms: null
 @
-The  
+
+\section{Display}
+\label{sec:display}
+
+<<main.py>>=
+from bokeh.io import curdoc
+from bokeh.plotting import figure, show, output_file
+from bokeh.models import ColorBar, LinearColorMapper, BasicTicker, \
+    ColumnDataSource, PrintfTickFormatter, HoverTool
+from bokeh.palettes import Plasma11
+from bokeh.layouts import widgetbox, row, column, layout
+from bokeh.models.widgets import Button, Slider, Select, Panel, \
+    Tabs, CheckboxGroup, TextInput, Div
+import numpy as np
+import yaml
+import atp
+
+CFG_FILE = 'ATP/atp.yaml'
+<<reading the atp config file>>
+print(cfg)
+obs = atp.Observatory(cfg)
+target = atp.Target(cfg,obs)
+stars  = atp.StarField(obs,target)
+r2a = 180*60/np.pi
+
+mlim = np.inf
+idx = stars.R<=mlim
+m = stars.R[idx]
+q = np.rint((m - m.min())/(m.max()-m.min())*10)
+c = [Plasma11[int(x)] for x in q]
+source = ColumnDataSource(data=dict(x=r2a*stars.local[0,idx],
+                                    y=r2a*stars.local[1,idx],
+                                    m=m,c=c))
+
+def update():
+    obs.update()
+    target.update(obs)
+    stars.update(obs)
+    x = r2a*stars.local[0,idx]
+    y = r2a*stars.local[1,idx]
+    #print(len(x),len(y),len(m),len(c))
+    source.data['x'] = x
+    source.data['y'] = y
+    #new_data = {'x':x,'y':y,'m':m,'c':c}
+    #source.stream(new_data)
+    p.title.text = "AGWS Target Practice - "+str(obs.time)+\
+                   ' - Alt: '+str(target.altaz.alt)+',Az: '+str(target.altaz.az)
+
+hover = HoverTool(tooltips=[("R", "@m")])
+p = figure(title="AGWS Target Practice - "+str(obs.time)+\
+           ' - Alt: '+str(target.altaz.alt)+',Az: '+str(target.altaz.az),
+           x_range=[-20,20],y_range=[-20,20],tools=[hover])
+p.circle(x='x',y='y',color='c',size=7,source=source)
+doc = curdoc()
+doc.add_root(p)
+doc.add_periodic_callback(update,1000)
+@
 \section{Files}
 \label{sec:files}
 
@@ -156,12 +213,12 @@ from datetime import datetime
 <<star field>>
 
 if __name__ == "__main__":
-
+    CFG_FILE = 'atp.yaml'
     <<reading the atp config file>>
-    obs = Observatory()
-    target = Target()
-    stars  = StarField(target)
-@ %def observatory
+    obs = Observatory(cfg)
+    target = Target(cfg,obs)
+    stars  = StarField(obs,target)
+@
 
 \subsection{Configuration}
 \label{sec:config}
@@ -176,7 +233,7 @@ The configuration file is read with:
 import yaml
 @
 <<reading the atp config file>>=
-with open('atp.yaml') as fp:
+with open(CFG_FILE) as fp:
     cfg = yaml.load(fp)
 @ %def cfg
     
