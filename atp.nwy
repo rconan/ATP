@@ -37,12 +37,17 @@ class Observatory:
         self.location = EarthLocation(lat=Quantity(*cfg['Observatory']['latitude']),
                                       lon=Quantity(*cfg['Observatory']['longitude']),
                                       height=Quantity(*cfg['Observatory']['height']))
-        self.time = Time(cfg['Observation']['time'])
-        print("@(Observatory)> Time:", Time(self.time, format='isot'))
+        self.start = Time(cfg['Observation']['time'])
+        self.time  = Time(cfg['Observation']['time'])
         if self.time is None:
             self.time = Time(datetime.now())
         self.time_resolution = Quantity(*cfg['Observation']['time resolution'])
-        
+        print(str(self))
+
+    def __str__(self):
+        return "@(Observatory)> Location: "+str(self.location.geodetic)+\
+               "\n@(Observatory)> Time: "+str(self.time)
+
     def update(self):
         self.time += self.time_resolution
 
@@ -50,7 +55,12 @@ class Observatory:
     def frame(self):
         return AltAz(obstime=self.time,
                      location=self.location)
-@ %def Observatory
+
+    @property
+    def sidereal_time(self):
+        return self.time.sidereal_time('apparent',self.location.lon)
+
+@ %def Observatory 
 
 \section{Target}
 \label{sec:target}
@@ -59,27 +69,39 @@ The target defines the direction the telescope is pointing at.
 The target is given by either the name of an astronomical object or sky coordinates in ra/dec or alt/az.
 <<target>>=
 class Target:
-    def __init__(self,cfg,obs):
-        if cfg['Observatory']['pointing target'] is not None:
-            self.icrs  = SkyCoord.from_name(cfg['Observatory']['pointing target'],
-                                            frame='icrs')
-            self.altaz = self.icrs.transform_to( obs.frame() )
-        if cfg['Observatory']['pointing ra/dec'] is not None:
-            self.icrs  = SkyCoord(ra=Quantity(*cfg['Observatory']['pointing ra/dec']['ra']),
-                                  dec=Quantity(*cfg['Obs change mode keyervatory']['pointing ra/dec']['dec']),
-                                  frame='icrs')
-            self.altaz = self.icrs.transform_to( obs.frame )
-        if cfg['Observatory']['pointing alt/az'] is not None:
-            self.altaz = SkyCoord(alt=Quantity(*cfg['Observatory']['pointing alt/az']['alt']),
-                                  az=Quantity(*cfg['Observatory']['pointing alt/az']['az']),
-                                  frame = obs.frame)
-            self.icrs  = self.altaz.transform_to( ICRS() )
+    def __init__(self,obs,cfg=None,icrs=None):
+        if cfg is not None:
+            if cfg['Observatory']['pointing target'] is not None:
+                self.icrs  = SkyCoord.from_name(cfg['Observatory']['pointing target'],
+                                                frame='icrs')
+            if cfg['Observatory']['pointing ra/dec'] is not None:
+                self.icrs  = SkyCoord(ra=Quantity(*cfg['Observatory']['pointing ra/dec']['ra']),
+                                      dec=Quantity(*cfg['Obs change mode keyervatory']['pointing ra/dec']['dec']),
+                                      frame='icrs')
+            if cfg['Observatory']['pointing alt/az'] is not None:
+                self.altaz = SkyCoord(alt=Quantity(*cfg['Observatory']['pointing alt/az']['alt']),
+                                      az=Quantity(*cfg['Observatory']['pointing alt/az']['az']),
+                                      frame = obs.frame)
+                self.icrs  = self.altaz.transform_to( ICRS() )
+        if icrs is not None:
+            self.icrs = icrs
+        self.rotator_angle = Quantity(0,'degree')
+        self.update(obs,rotator=False)
         print("@(Target)>")
         print(self.icrs)
         print(self.altaz)
 
-    def update(self,obs):
+    def update(self,obs,rotator=True):
         self.altaz = self.icrs.transform_to( obs.frame )
+        H = (obs.sidereal_time.to(units.rad) - self.icrs.ra.to(units.rad)).value
+        D = self.icrs.dec.to(units.rad).value
+        L = obs.location.lat.to(units.rad).value
+        self.parallactic_angle = Quantity(np.arctan2( np.sin(L)*np.cos(D) - np.cos(L)*np.cos(H)*np.sin(D) ,
+                                            -np.cos(L)*np.sin(H) ) , 'deg')
+        if rotator:
+            self.rotator_angle += np.cos(obs.location.lat)*np.cos(self.altaz.az)/\
+                                  np.cos(self.altaz.alt)*obs.time_resolution.to('s').value*\
+                                  Quantity(15,'degree')/3600
 @ %def Target
 
 \section{AGWS Star Field}
@@ -87,7 +109,7 @@ class Target:
 
 An AGWS star field is read from the TESS Input Catalogue (TIC\footnote{\url{https://tess.mit.edu/data/tess-input-catalogue/}}).
 A 10 arcmin radius circular region is queried from the catalogue centered on either a given target or a given sky alt/az coordinate.
-An observation date and time must also be specified, the default is the current date and time.
+An observation date and time must also be specified.
 The data is further reduced to objects that have both a magnitude in R and J bands.
 <<module imports>>=
 import numpy as np
@@ -102,49 +124,97 @@ def Rz(c):
     return np.array([[np.cos(c),np.sin(c),0],[-np.sin(c),np.cos(c),0],[0,0,1]])
 def Ry(b):
     return np.array([[np.cos(b),0,-np.sin(b)],[0,1,0],[np.sin(b),0,np.cos(b)]])
+def Rx(a):
+    return np.array([[1,0,0],[0,np.cos(a),np.sin(a)],[0,-np.sin(a),np.cos(a)]])
 class StarField:
-    def __init__(self,obs,target):
-        radius = Quantity(10,units.arcminute)
-        print("@(StarField)> Querying TIC ...")
+    def __init__(self,obs,target,field=None):
         self.target = target
-        catalogData = Catalogs.query_region(target.icrs, radius=radius,
-                                            catalog="TIC",objType="STAR")
-        print('@(StarField)> Catalog entry #',len(catalogData))
-        Rmag = np.array(catalogData['rmag'])
-        Jmag = np.array(catalogData['Jmag'])
-        mask = np.logical_and(~np.isnan(Rmag),~np.isnan(Jmag))
-        n = mask.sum()
-        print('@(StarField)> Entries with both R and J magnitude #',n)
-        self.R = Rmag[mask]
-        self.J = Jmag[mask]
-        if n>0:
-            print('@(StarField)> R magnitude range [{0},{1}]'.format(self.R.min(),self.R.max()))
-            print('@(StarField)> J magnitude range [{0},{1}]'.format(self.J.min(),self.J.max()))
-            data = catalogData[mask]
-            self.icrs = SkyCoord(ra=data['ra']*units.deg,
-                                 dec=data['dec']*units.deg,
+        if field is None:
+            radius = Quantity(10,units.arcminute)
+            print("@(StarField)> Querying TIC ...")
+            catalogData = Catalogs.query_region(target.icrs, radius=radius,
+                                                catalog="TIC",objType="STAR")
+            print('@(StarField)> Catalog entry #',len(catalogData))
+            Rmag = np.array(catalogData['rmag'])
+            Jmag = np.array(catalogData['Jmag'])
+            mask = np.logical_and(~np.isnan(Rmag),~np.isnan(Jmag))
+            n = mask.sum()
+            print('@(StarField)> Entries with both R and J magnitude #',n)
+            self.R = Rmag[mask]
+            self.J = Jmag[mask]
+            if n>0:
+                print('@(StarField)> R magnitude range [{0},{1}]'.format(self.R.min(),self.R.max()))
+                print('@(StarField)> J magnitude range [{0},{1}]'.format(self.J.min(),self.J.max()))
+                data = catalogData[mask]
+                self.icrs = SkyCoord(ra=data['ra']*units.deg,
+                                     dec=data['dec']*units.deg,
+                                     frame='icrs')
+        else:
+            with open(field) as fp:
+                data = yaml.load(fp)
+            self.icrs = SkyCoord(ra=Quantity(*data['ra']),
+                                 dec=Quantity(*data['dec']),
                                  frame='icrs')
-            self.update(obs)
+            self.R = data['Rmag']
+            self.J = data['Jmag']
 
-    def update(self,obs):
-        self.altaz = self.icrs.transform_to( obs.frame )
-        cra = np.cos(self.altaz.az.to(units.rad))
-        sra = np.sin(self.altaz.az.to(units.rad))
-        cdec = np.cos(self.altaz.alt.to(units.rad))
-        sdec = np.sin(self.altaz.alt.to(units.rad))
-        x = cra*cdec
-        y = sra*cdec
-        z = sdec
-        R = Ry(np.pi/2*units.rad-self.target.altaz.alt.to(units.rad)) @ \
-            Rz(self.target.altaz.az.to(units.rad))
-        v = np.array(np.vstack([x,y,z]))
-        self.local = R @ v              
+        self.update(obs)
+
+    <<star field update>>
+
+@
+The alt/az coordinates of the star are transformed in a coordinate system
+centered and aligned to the target.
+<<star field update>>=
+def update(self,obs):
+    self.altaz = self.icrs.transform_to( obs.frame )
+    cra = np.cos(self.altaz.az.to(units.rad))
+    sra = np.sin(self.altaz.az.to(units.rad))
+    cdec = np.cos(self.altaz.alt.to(units.rad))
+    sdec = np.sin(self.altaz.alt.to(units.rad))
+    x = cra*cdec
+    y = sra*cdec
+    z = sdec
+    #print(self.target.rotator_angle)
+    R = Rz(self.target.rotator_angle) @ \
+           Ry(np.pi/2*units.rad-self.target.altaz.alt.to(units.rad)) @ \
+           Rz(self.target.altaz.az.to(units.rad))
+    v = np.array(np.vstack([x,y,z]))
+    self.local = R @ v              
 @ %def StarField
 <<Star field config>>=
 STAR CATALOG:
    ra/dec error rms: null
 @
+\section{The probes}
+\label{sec:probes}
 
+The AGWS is made of 4 identical probes.
+The probe envelope dictates t
+<<probe.yaml>>=
+Probe:
+  geometry:
+    x: [0,0]
+    y: [0,0]
+    buffer width: [1.5,'cm']
+  guider:
+    fov: [30,'arcsec']
+  tt7:
+    fov: [5,'arcsec']
+@
+<<probe>>=
+class Probe:
+    def __init__(self,az,exclude_rad=Quantity(0,'arcmin')):
+        self.rad = Quantity(1360/60,'arcmin')
+        self.az  = az
+        self.range_rad = self.rad - exclude_rad
+        self.local = np.array([[self.rad.to('rad').value*np.cos(self.az).value],
+                               [self.rad.to('rad').value*np.sin(self.az).value]])
+    def reachForTheStars(self,stars):
+        probe_local = stars.local[:2,:] - self.local
+        probe_dist = np.hypot(probe_local[0,:],probe_local[1,:])
+        self.stars_idx = probe_dist<=self.range_rad.to('rad').value
+@
 \section{Display}
 \label{sec:display}
 
@@ -153,52 +223,65 @@ from bokeh.io import curdoc
 from bokeh.plotting import figure, show, output_file
 from bokeh.models import ColorBar, LinearColorMapper, BasicTicker, \
     ColumnDataSource, PrintfTickFormatter, HoverTool
-from bokeh.palettes import Plasma11
+from bokeh.palettes import Plasma11, Spectral4
 from bokeh.layouts import widgetbox, row, column, layout
 from bokeh.models.widgets import Button, Slider, Select, Panel, \
-    Tabs, CheckboxGroup, TextInput, Div
+    Tabs, CheckboxGroup, TextInput, Div, Toggle
 import numpy as np
 import yaml
-import atp
+from astropy.units import Quantity
+from atp import Observatory, Target, StarField, Probe
 
 CFG_FILE = 'ATP/atp.yaml'
 <<reading the atp config file>>
 print(cfg)
-obs = atp.Observatory(cfg)
-target = atp.Target(cfg,obs)
-stars  = atp.StarField(obs,target)
+obs = Observatory(cfg)
+target = Target(obs,cfg)
+stars  = StarField(obs,target)
+probes  = [Probe(Quantity(k*90,'degree')) for k in range(4)]
+for k in range(len(probes)):
+    probes[k].reachForTheStars(stars)
 r2a = 180*60/np.pi
 
-mlim = np.inf
-idx = stars.R<=mlim
-m = stars.R[idx]
-q = np.rint((m - m.min())/(m.max()-m.min())*10)
+mlim = 18
+idx = probes[3].stars_idx#stars.R<=mlim
+Rmag = stars.R[idx]
+Jmag = stars.J[idx]
+q = np.rint((Rmag - Rmag.min())/(Rmag.max()-Rmag.min())*10)
 c = [Plasma11[int(x)] for x in q]
 source = ColumnDataSource(data=dict(x=r2a*stars.local[0,idx],
                                     y=r2a*stars.local[1,idx],
-                                    m=m,c=c))
+                                    Rmag=Rmag,c=c,Jmag=Jmag))
+
+rotator = Toggle(label="Rotator", button_type="success" ,active=True)
 
 def update():
     obs.update()
-    target.update(obs)
+    target.update(obs,rotator=rotator.active)
     stars.update(obs)
     x = r2a*stars.local[0,idx]
     y = r2a*stars.local[1,idx]
-    #print(len(x),len(y),len(m),len(c))
+    #print(len(x),len(y),len(Rmag),len(c))
     source.data['x'] = x
     source.data['y'] = y
-    #new_data = {'x':x,'y':y,'m':m,'c':c}
+    #new_data = {'x':x,'y':y,'Rmag':Rmag,'c':c}
     #source.stream(new_data)
-    p.title.text = "AGWS Target Practice - "+str(obs.time)+\
-                   ' - Alt: '+str(target.altaz.alt)+',Az: '+str(target.altaz.az)
+    p.title.text = "AGWS - "+str(obs.time)+\
+                   ' - Alt: '+str(target.altaz.alt)+\
+                   ',Az: '+str(target.altaz.az)
 
-hover = HoverTool(tooltips=[("R", "@m")])
-p = figure(title="AGWS Target Practice - "+str(obs.time)+\
-           ' - Alt: '+str(target.altaz.alt)+',Az: '+str(target.altaz.az),
+hover = HoverTool(tooltips=[("R", "@Rmag"),("J", "@Jmag")])
+p = figure(title="AGWS - "+str(obs.time)+\
+           ' - Alt: '+str(target.altaz.alt)+\
+           ',Az: '+str(target.altaz.az),
            x_range=[-20,20],y_range=[-20,20],tools=[hover])
 p.circle(x='x',y='y',color='c',size=7,source=source)
+p.xaxis.axis_label = "[arcmin]"
+p.yaxis.axis_label = "[arcmin]"
+
 doc = curdoc()
-doc.add_root(p)
+doc.add_root(row(widgetbox(rotator),p))
+#update()
 doc.add_periodic_callback(update,1000)
 @
 \section{Files}
@@ -211,13 +294,15 @@ from datetime import datetime
 <<observatory>>
 <<target>>
 <<star field>>
+<<probe>>
 
 if __name__ == "__main__":
     CFG_FILE = 'atp.yaml'
     <<reading the atp config file>>
     obs = Observatory(cfg)
-    target = Target(cfg,obs)
+    target = Target(obs,cfg)
     stars  = StarField(obs,target)
+    probe  = Probe(Quantity(0,'degree'))
 @
 
 \subsection{Configuration}
