@@ -86,7 +86,7 @@ class Observatory:
         self.current_time  = Time(observation_args['time'])
         if self.current_time is None:
             self.current_time = Time(datetime.now())
-        self.current_time_resolution = Quantity(*observation_args['time resolution'])
+        self.time_resolution = Quantity(*observation_args['time resolution'])
         print(str(self))
 
     def __str__(self):
@@ -121,18 +121,18 @@ The target defines the direction the telescope is pointing at.
 The target is given by either the name of an astronomical object or sky coordinates in ra/dec or alt/az.
 <<target>>=
 class Target:
-    def __init__(self,obs,cfg=None,icrs=None):
-        if cfg is not None:
-            if observatory_args['pointing target'] is not None:
-                self.icrs  = SkyCoord.from_name(observatory_args['pointing target'],
+    def __init__(self,obs,pointing_args=None,icrs=None):
+        if pointing_args is not None:
+            if pointing_args['pointing target'] is not None:
+                self.icrs  = SkyCoord.from_name(pointing_args['pointing target'],
                                                 frame='icrs')
-            if observatory_args['pointing ra/dec'] is not None:
-                self.icrs  = SkyCoord(ra=Quantity(*observatory_args['pointing ra/dec']['ra']),
+            if pointing_args['pointing ra/dec'] is not None:
+                self.icrs  = SkyCoord(ra=Quantity(*pointing_args['pointing ra/dec']['ra']),
                                       dec=Quantity(*cfg['Obs keyervatory']['pointing ra/dec']['dec']),
                                       frame='icrs')
-            if observatory_args['pointing alt/az'] is not None:
-                self.altaz = SkyCoord(alt=Quantity(*observatory_args['pointing alt/az']['alt']),
-                                      az=Quantity(*observatory_args['pointing alt/az']['az']),
+            if pointing_args['pointing alt/az'] is not None:
+                self.altaz = SkyCoord(alt=Quantity(*pointing_args['pointing alt/az']['alt']),
+                                      az=Quantity(*pointing_args['pointing alt/az']['az']),
                                       frame = obs.frame)
                 self.icrs  = self.altaz.transform_to( ICRS() )
         if icrs is not None:
@@ -288,7 +288,7 @@ CFG_FILE = 'ATP/atp.yaml'
 <<reading the atp config file>>
 print(cfg)
 obs = Observatory(cfg['Observatory'],cfg['Observation'])
-target = Target(obs,cfg)
+target = Target(obs,cfg['Observatory'])
 stars  = StarField(obs,target)
 probes  = [Probe(Quantity(k*90,'degree')) for k in range(4)]
 for k in range(len(probes)):
@@ -318,12 +318,12 @@ def update():
     source.data['y'] = y
     #new_data = {'x':x,'y':y,'Rmag':Rmag,'c':c}
     #source.stream(new_data)
-    p.title.text = "AGWS - "+str(obs.time)+\
+    p.title.text = "AGWS - "+str(obs.current_time)+\
                    ' - Alt: '+str(target.altaz.alt)+\
                    ',Az: '+str(target.altaz.az)
 
 hover = HoverTool(tooltips=[("R", "@Rmag"),("J", "@Jmag")])
-p = figure(title="AGWS - "+str(obs.time)+\
+p = figure(title="AGWS - "+str(obs.current_time)+\
            ' - Alt: '+str(target.altaz.alt)+\
            ',Az: '+str(target.altaz.az),
            x_range=[-20,20],y_range=[-20,20],tools=[hover])
