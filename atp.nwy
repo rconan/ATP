@@ -2,14 +2,21 @@
 \section{Introduction}
 \label{sec:introduction}
 
+This report describes the method to choose the guide stars (GS) of the AGWS.
+
 \section{Installation}
 \label{sec:installation}
 
 \section{Implementation}
 \label{sec:implementation}
 
+
+
 \section{Observation}
 \label{sec:observation}
+
+The observation date and UTC time must be given.
+The time resolution of the observation is used as the sampling time of the simulation.
 
 <<Observation config>>=
 Observation:
@@ -18,6 +25,8 @@ Observation:
 @ 
 \section{The Observatory}
 \label{sec:gmt}
+
+The observatory coordinates are:
 
 <<Observatory config>>=
 Observatory:
@@ -31,36 +40,45 @@ Observatory:
       az: [0,'degree']
    pointing accuracy: null
 @
+The [[Observatory]] class contains the geodetic coordinates of the telescope and the
+observation date, time and time resolution.
 <<observatory>>=
 class Observatory:
-    def __init__(self,cfg):
-        self.location = EarthLocation(lat=Quantity(*cfg['Observatory']['latitude']),
-                                      lon=Quantity(*cfg['Observatory']['longitude']),
-                                      height=Quantity(*cfg['Observatory']['height']))
-        self.start = Time(cfg['Observation']['time'])
-        self.time  = Time(cfg['Observation']['time'])
-        if self.time is None:
-            self.time = Time(datetime.now())
-        self.time_resolution = Quantity(*cfg['Observation']['time resolution'])
+    def __init__(self,observatory_args,observation_args):
+        self.location = EarthLocation(lat=Quantity(*observatory_args['latitude']),
+                                      lon=Quantity(*observatory_args['longitude']),
+                                      height=Quantity(*observatory_args['height']))
+        self.start_time = Time(observation_args['time'])
+        self.current_time  = Time(observation_args['time'])
+        if self.current_time is None:
+            self.current_time = Time(datetime.now())
+        self.time_resolution = Quantity(*observation_args['time resolution'])
         print(str(self))
 
     def __str__(self):
         return "@(Observatory)> Location: "+str(self.location.geodetic)+\
-               "\n@(Observatory)> Time: "+str(self.time)
+               "\n@(Observatory)> Time: "+str(self.current_time)
 
-    def update(self):
-        self.time += self.time_resolution
-
-    @property
-    def frame(self):
-        return AltAz(obstime=self.time,
-                     location=self.location)
-
-    @property
-    def sidereal_time(self):
-        return self.time.sidereal_time('apparent',self.location.lon)
-
+    <<observatory method>>
 @ %def Observatory 
+The [[update]] method accrues the observation time by the time resolution amount:
+<<observatory method>>=
+def update(self):
+    self.current_time += self.time_resolution
+@
+The telescope alt/az frame of reference is associated to the [[frame]] property.
+<<observatory method>>=
+@property
+def frame(self):
+    return AltAz(obstime=self.current_time,
+                 location=self.location)
+@
+The sidereal time is obtained from the [[sidereal_time]] property:
+<<observatory method>>=
+@property
+def sidereal_time(self):
+    return self.current_time.sidereal_time('apparent',self.location.lon)
+@
 
 \section{Target}
 \label{sec:target}
@@ -69,18 +87,18 @@ The target defines the direction the telescope is pointing at.
 The target is given by either the name of an astronomical object or sky coordinates in ra/dec or alt/az.
 <<target>>=
 class Target:
-    def __init__(self,obs,cfg=None,icrs=None):
-        if cfg is not None:
-            if cfg['Observatory']['pointing target'] is not None:
-                self.icrs  = SkyCoord.from_name(cfg['Observatory']['pointing target'],
+    def __init__(self,obs,pointing_args=None,icrs=None):
+        if pointing_args is not None:
+            if pointing_args['pointing target'] is not None:
+                self.icrs  = SkyCoord.from_name(pointing_args['pointing target'],
                                                 frame='icrs')
-            if cfg['Observatory']['pointing ra/dec'] is not None:
-                self.icrs  = SkyCoord(ra=Quantity(*cfg['Observatory']['pointing ra/dec']['ra']),
-                                      dec=Quantity(*cfg['Obs change mode keyervatory']['pointing ra/dec']['dec']),
+            if pointing_args['pointing ra/dec'] is not None:
+                self.icrs  = SkyCoord(ra=Quantity(*pointing_args['pointing ra/dec']['ra']),
+                                      dec=Quantity(*pointing_args['pointing ra/dec']['dec']),
                                       frame='icrs')
-            if cfg['Observatory']['pointing alt/az'] is not None:
-                self.altaz = SkyCoord(alt=Quantity(*cfg['Observatory']['pointing alt/az']['alt']),
-                                      az=Quantity(*cfg['Observatory']['pointing alt/az']['az']),
+            if pointing_args['pointing alt/az'] is not None:
+                self.altaz = SkyCoord(alt=Quantity(*pointing_args['pointing alt/az']['alt']),
+                                      az=Quantity(*pointing_args['pointing alt/az']['az']),
                                       frame = obs.frame)
                 self.icrs  = self.altaz.transform_to( ICRS() )
         if icrs is not None:
@@ -235,8 +253,8 @@ from atp import Observatory, Target, StarField, Probe
 CFG_FILE = 'ATP/atp.yaml'
 <<reading the atp config file>>
 print(cfg)
-obs = Observatory(cfg)
-target = Target(obs,cfg)
+obs = Observatory(cfg['Observatory'],cfg['Observation'])
+target = Target(obs,cfg['Observatory'])
 stars  = StarField(obs,target)
 probes  = [Probe(Quantity(k*90,'degree')) for k in range(4)]
 for k in range(len(probes)):
@@ -266,12 +284,12 @@ def update():
     source.data['y'] = y
     #new_data = {'x':x,'y':y,'Rmag':Rmag,'c':c}
     #source.stream(new_data)
-    p.title.text = "AGWS - "+str(obs.time)+\
+    p.title.text = "AGWS - "+str(obs.current_time)+\
                    ' - Alt: '+str(target.altaz.alt)+\
                    ',Az: '+str(target.altaz.az)
 
 hover = HoverTool(tooltips=[("R", "@Rmag"),("J", "@Jmag")])
-p = figure(title="AGWS - "+str(obs.time)+\
+p = figure(title="AGWS - "+str(obs.current_time)+\
            ' - Alt: '+str(target.altaz.alt)+\
            ',Az: '+str(target.altaz.az),
            x_range=[-20,20],y_range=[-20,20],tools=[hover])
