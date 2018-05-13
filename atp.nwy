@@ -13,7 +13,13 @@ This report describes the method to choose the guide stars (GS) of the AGWS.
 The main python module is
 <<atp.py>>=
 <<module imports>>
+import ceo
 from datetime import datetime
+RAD2MAS = 180*3600e3/np.pi
+RAD2ARCSEC = 180*3600/np.pi
+ARCMIN2RAD = np.pi/180/60
+<<TT7 performance estimator>>
+<<SH GSs>>
 <<observatory>>
 <<target>>
 <<star field>>
@@ -21,13 +27,29 @@ from datetime import datetime
 
 if __name__ == "__main__":
     CFG_FILE = 'atp.yaml'
-    <<reading the atp config file>>
-    obs = Observatory(cfg)
-    target = Target(obs,cfg)
-    stars  = StarField(obs,target)
-    probe  = Probe(Quantity(0,'degree'))
+    <<atp main>>
+@ with
+<<atp main>>=
+<<reading the atp config file>>
+obs = Observatory(cfg['Observatory'],cfg['Observation'])
+target = Target(obs,cfg['Observatory'])
+stars  = StarField(obs,target)
 @
-
+<<opt-out>>=
+tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.R)]
+tt7_gs_idx = np.argmin(tt_res_rms)
+probes  = []
+tt7_dist = []
+for k in range(4):
+    probes += [Probe(Quantity(k*90,'degree'))]
+    probes[k].reachForTheStars(stars)
+    tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
+tt7_idx = np.argmin(tt7_dist)
+TT7 = probes[tt7_idx]
+TT7.gs_idx = tt7_gs_idx
+probes.pop(tt7_idx)
+SH_GSs()
+@
 \subsection{Configuration}
 \label{sec:config}
 
@@ -159,6 +181,12 @@ class Target:
 \section{AGWS Star Field}
 \label{sec:star-field}
 
+<<Star field config>>=
+STAR CATALOG:
+  ra/dec error rms: null
+  exclude radius: [3,'arcmin']
+  R magnitude limit: 18
+@
 An AGWS star field is read from the TESS Input Catalogue (TIC\footnote{\url{https://tess.mit.edu/data/tess-input-catalogue/}}).
 A 10 arcmin radius circular region is queried from the catalogue centered on either a given target or a given sky alt/az coordinate.
 An observation date and time must also be specified.
@@ -179,45 +207,64 @@ def Ry(b):
 def Rx(a):
     return np.array([[1,0,0],[0,np.cos(a),np.sin(a)],[0,-np.sin(a),np.cos(a)]])
 class StarField:
-    def __init__(self,obs,target,field=None):
+    def __init__(self,obs,target,field=None,Vmag_lim=18,exclude_radius=Quantity(3,'arcmin'),**kwargs):
         self.target = target
+        self.Vmag_lim = Vmag_lim
+        self.exclude_radius = exclude_radius
         if field is None:
             radius = Quantity(10,units.arcminute)
             print("@(StarField)> Querying TIC ...")
-            catalogData = Catalogs.query_region(target.icrs, radius=radius,
+            self.catalogData = Catalogs.query_region(target.icrs, radius=radius,
                                                 catalog="TIC",objType="STAR")
-            print('@(StarField)> Catalog entry #',len(catalogData))
-            Rmag = np.array(catalogData['rmag'])
-            Jmag = np.array(catalogData['Jmag'])
-            mask = np.logical_and(~np.isnan(Rmag),~np.isnan(Jmag))
-            n = mask.sum()
-            print('@(StarField)> Entries with both R and J magnitude #',n)
-            self.R = Rmag[mask]
-            self.J = Jmag[mask]
-            if n>0:
-                print('@(StarField)> R magnitude range [{0},{1}]'.format(self.R.min(),self.R.max()))
-                print('@(StarField)> J magnitude range [{0},{1}]'.format(self.J.min(),self.J.max()))
-                data = catalogData[mask]
-                self.icrs = SkyCoord(ra=data['ra']*units.deg,
-                                     dec=data['dec']*units.deg,
-                                     frame='icrs')
+            if self.apply_constrains()>0:
+                self.update(obs)
         else:
             with open(field) as fp:
                 data = yaml.load(fp)
             self.icrs = SkyCoord(ra=Quantity(*data['ra']),
                                  dec=Quantity(*data['dec']),
                                  frame='icrs')
-            self.R = data['Rmag']
+            self.V = data['Vmag']
             self.J = data['Jmag']
 
-        self.update(obs)
+            self.update(obs)
 
-    <<star field update>>
+    <<star field methods>>
+@
+<<star field methods>>=
+def apply_constrains(self):
+    print('@(StarField)> Catalog entry #',len(self.catalogData))
+    if self.exclude_radius is not None:
+        uu = self.catalogData['ra']*units.deg - self.target.icrs.ra
+        vv = self.catalogData['dec']*units.deg - self.target.icrs.dec
+        mask = np.hypot(uu,vv) > self.exclude_radius
+        print('@(StarField)> Entries accessible #',mask.sum())
+    Vmag = np.array(self.catalogData['Vmag'])
+    Jmag = np.array(self.catalogData['Jmag'])
 
+    _mask_ = np.logical_and(~np.isnan(Vmag),~np.isnan(Jmag))
+    mask = np.logical_and(mask,_mask_)
+
+    Vmag[np.isnan(Vmag)] = self.Vmag_lim+1
+    _mask_ = Vmag<=self.Vmag_lim
+    mask = np.logical_and(mask,_mask_)
+
+    self.V = Vmag[mask]
+    self.J = Jmag[mask]
+    data = self.catalogData[mask]
+    n = mask.sum()
+    print('@(StarField)> Entries with both V and J magnitude #',n)
+    if n>0:
+        print('@(StarField)> V magnitude range [{0},{1}]'.format(self.V.min(),self.V.max()))
+        print('@(StarField)> J magnitude range [{0},{1}]'.format(self.J.min(),self.J.max()))
+        self.icrs = SkyCoord(ra=data['ra']*units.deg,
+                             dec=data['dec']*units.deg,
+                             frame='icrs')
+    return n
 @
 The alt/az coordinates of the star are transformed in a coordinate system
 centered and aligned to the target.
-<<star field update>>=
+<<star field methods>>=
 def update(self,obs):
     self.altaz = self.icrs.transform_to( obs.frame )
     cra = np.cos(self.altaz.az.to(units.rad))
@@ -232,11 +279,177 @@ def update(self,obs):
            Ry(np.pi/2*units.rad-self.target.altaz.alt.to(units.rad)) @ \
            Rz(self.target.altaz.az.to(units.rad))
     v = np.array(np.vstack([x,y,z]))
-    self.local = R @ v              
+    self.local = R @ v
+@
+<<star field methods>>=
+def distanceFrom(self,origin=Quantity([[0.0],[0.0]],'arcmin'),star_idx=np.s_[:],u=None):
+    dist = np.sqrt(np.sum((self.local[:2,star_idx]-origin.to(units.rad).value)**2,0))
+    if u is not None:
+        dist = Quantity(dist,units.rad).to(u)
+    return dist
 @ %def StarField
-<<Star field config>>=
-STAR CATALOG:
-   ra/dec error rms: null
+
+\section{TT7 rms residual error}
+\label{sec:tt7}
+
+<<TT7 performance estimator>>=
+from scipy.special import j0, j1, jn, gamma
+from scipy.integrate import quad
+def tt7_res_rms(zz,magnitude,r0 = 16e-2,L0 = 25.0,
+                zenith_distance = 30*np.pi/180,
+                wfs_camera_exposureTime=1/200):
+    if magnitude>14:
+        return np.Inf
+    else:
+        def G(_f_,D):
+            f = np.array(_f_)
+            out = np.ones_like(f)
+            idx = f!=0
+            red = np.pi*D*f[idx]
+            out[idx] = (2*j1(red)/red)**2
+            return out
+        def integrandSF(f,theta,gam,r0,wl,L0,D,altitude,fr0):
+            f0 = 1.0/L0
+            cst = np.pi*gamma(11./6.)**2/(2*np.pi**(11./3.))*(24*gamma(6./5.)/5)**(5./6.)
+            cst *= wl**2*r0**(-5.0/3.0)*RAD2MAS**2
+            sum = 0.0
+            for k in range(altitude.size):
+                rho = theta*altitude[k]
+                red = 2*np.pi*rho*f
+                sum += fr0[k]*f**3*(f**2+f0**2)**(-11.0/6.0)*G(f,D)*\
+                   ( 1 - j0(red) + np.cos(2*gam)*jn(2,red) )
+            return 2*cst*sum
+        D = 25.5
+        r0_wavelength = 500e-9
+        gs_wavelength = 715e-9
+        r0 = r0*(gs_wavelength/r0_wavelength)**1.2
+        r0 = (r0**(-5./3.)/np.cos(zenith_distance))**(-3./5.)
+        seeingArcsec = gs_wavelength/r0*RAD2ARCSEC
+        wl = gs_wavelength
+        altitude = np.array([25, 275, 425, 1250, 4000, 8000, 13000,])
+        fr0 = np.array([0.1257, 0.0874, 0.0666, 0.3498, 0.2273, 0.0681, 0.0751,])
+        vs = np.array([5.6540, 5.7964, 5.8942, 6.6370, 13.2925, 34.8250, 29.4187,])
+        vd = np.array([0.7798, 8.2564, 12.4752, 32.5007, 72.0987, 93.1994, 100.0507,])*np.pi/180
+
+        cex_var,err = quad(integrandSF,0,np.inf,limit=200,
+                     args=(ARCMIN2RAD*zz,0,r0,wl,L0,D,altitude,fr0))
+        cey_var,err = quad(integrandSF,0,np.inf,limit=200,
+                     args=(ARCMIN2RAD*zz,np.pi/2,r0,wl,L0,D,altitude,fr0))
+
+        area = 357
+        wfs_camera_photoelectron_gain = 0.8*0.48
+        gs_nPhoton = 9e12*10**(-0.4*magnitude)
+        nPhLenslet = wfs_camera_exposureTime*wfs_camera_photoelectron_gain*gs_nPhoton
+        photon_noise_rms = 1e3*seeingArcsec/np.sqrt(2*np.log(2)*nPhLenslet)
+
+        return np.sqrt(np.sum([cex_var,cey_var,2*photon_noise_rms**2]))
+@
+\section{Shack--Hartmann guide stars}
+\label{sec:sh-gs}
+
+<<SH GSs>>=
+def SH_GSs(probes,stars,min_radius=6,nTest=10):
+    print('SH GSs...')
+    lo = 2*np.pi/3
+    stars_xy = np.hstack([stars.local[:2,probe.stars_idx] for probe in probes])
+    R = np.hstack([stars.V[probe.stars_idx] for probe in probes])
+    stars_r = np.sqrt(np.sum(stars_xy**2,0))
+    stars_o = np.arctan2(stars_xy[1,:],stars_xy[0,:])
+    q = Quantity(stars_r,'rad').to('arcmin')
+    mask = np.logical_and(q>Quantity(min_radius,'arcmin'),q<=Quantity(10,'arcmin'))
+    Rmin = []
+    az_dist = []
+    q = stars_o[mask]
+    for c,_q_ in enumerate(q):
+        qc = q - _q_
+        id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
+        az_dist += [np.abs(qc[id2].sum())]
+        Rmin += [np.min(R[mask][[c]+id2])]
+    L=25.5
+    nPx = 101
+    nLenslet = 48
+    gmt = ceo.GMT_MX(M1_mirror_modes=u"bending modes",M1_N_MODE=27)
+    src = ceo.Source(photometric_band="V",
+                    rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
+    src>>(gmt,)
+    zen = np.ones(3)*ceo.constants.ARCMIN2RAD*8
+    azi = np.arange(3)*2*np.pi/3
+    gs = ceo.Source(photometric_band="R+I",zenith=zen.tolist(),azimuth=azi.tolist(),
+                    rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
+    def wfs_error_rms_mas(magnitude):
+        r0 = 16e-2
+        r0_wavelength = 500e-9
+        _r0_ = r0*(gs.wavelength/r0_wavelength)**1.2
+        seeingArcsec = gs.wavelength/_r0_*ceo.constants.RAD2ARCSEC
+
+        wfs_camera_exposureTime = 30
+        wfs_camera_photoelectron_gain = 0.8*0.48
+        gs.magnitude = [magnitude]*3
+        nPhLenslet = wfs_camera_exposureTime*wfs_camera_photoelectron_gain*gs.nPhoton[0]*(25.5/48)**2
+        return 1e3*seeingArcsec/np.sqrt(2*np.log(2)*nPhLenslet)
+    az_idx = np.argsort(az_dist)
+    median_wfe_rms = []
+    for kTest in range(nTest):
+        id1 = az_idx[kTest]
+        qc = q-q[id1]
+        id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
+        ids = [id1]+id2
+        stars_r[mask][ids],stars_o[mask][ids],R[mask][ids]
+
+        nSample = 100
+        wfs = ceo.GeometricShackHartmann(nLenslet,L/nLenslet,3)
+        zen = stars_r[mask][ids]#np.ones(3)*ceo.constants.ARCMIN2RAD*gs_radius
+        azi = stars_o[mask][ids]#np.arange(3)*2*np.pi/3
+        gs = ceo.Source(photometric_band="R+I",zenith=zen.tolist(),azimuth=azi.tolist(),
+                        magnitude=R[mask][ids],
+                        rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
+
+        gs.reset()
+        gmt.reset()
+        gmt.propagate(gs)
+        wfs.calibrate(gs,0.)
+        gs>>(gmt,wfs)
+
+        C = gmt.AGWS_calibrate(wfs,gs,decoupled=True,fluxThreshold=0.5,includeBM=False,
+                               filterMirrorRotation=True,
+                              calibrationVaultKwargs={'nThreshold':[2]*6+[0],
+                                                      'insertZeros':[None]*6 + [[2,7]]})
+
+        nSample = 10
+        wfe_rms = np.zeros(nSample)
+        for k in range(nSample):
+            n = np.random.randn(nLenslet**2*2,3)#
+            for l in range(3):
+                n[:,l] *= wfs_error_rms_mas(gs.magnitude[l])*ceo.constants.MAS2RAD
+
+            ~gmt
+            state = gmt.state
+            ~wfs
+            +gs
+            -wfs
+            c = C.dot(wfs.Data + n.reshape(-1,1)).reshape(7,-1)
+
+            state['M1']['Rxyz'] -= c[:,:3]
+            state['M1']['Txyz'] -= c[:,3:6]
+            state['M2']['Rxyz'] -= c[:,6:9]
+            state['M2']['Txyz'] -= c[:,9:12]
+
+            gmt^=state
+
+            +src
+            wfe_rms[k] = src.wavefront.rms(-9)
+
+        median_wfe_rms += [np.median(wfe_rms)]
+    w = np.argsort(median_wfe_rms)[0]
+    id1 = az_idx[w]
+    qc = q-q[id1]
+    id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
+    ids = [id1]+id2
+    print(stars_r[mask][ids],stars_o[mask][ids],R[mask][ids])
+    for uid in ids:
+        probe_id = np.argmin([stars.distanceFrom(Quantity(probe.local,'rad'),
+                                                 star_idx=[uid],u='arcmin') for probe in probes])
+        probes[probe_id].gs_idx = uid
 @
 \section{The probes}
 \label{sec:probes}
@@ -256,16 +469,16 @@ Probe:
 @
 <<probe>>=
 class Probe:
-    def __init__(self,az,exclude_rad=Quantity(0,'arcmin')):
+    def __init__(self,az,exclude_rad=Quantity(2,'arcmin')):
         self.rad = Quantity(1360/60,'arcmin')
         self.az  = az
         self.range_rad = self.rad - exclude_rad
         self.local = np.array([[self.rad.to('rad').value*np.cos(self.az).value],
                                [self.rad.to('rad').value*np.sin(self.az).value]])
+        self.gs_idx = None
     def reachForTheStars(self,stars):
-        probe_local = stars.local[:2,:] - self.local
-        probe_dist = np.hypot(probe_local[0,:],probe_local[1,:])
-        self.stars_idx = probe_dist<=self.range_rad.to('rad').value
+        dist_to_probe = stars.distanceFrom(Quantity(self.local,'rad'))
+        self.stars_idx = dist_to_probe<=self.range_rad.to('rad').value
 @
 \section{Display}
 \label{sec:display}
@@ -282,60 +495,213 @@ from bokeh.models.widgets import Button, Slider, Select, Panel, \
 import numpy as np
 import yaml
 from astropy.units import Quantity
-from atp import Observatory, Target, StarField, Probe
+from atp import Observatory, Target, StarField, Probe, tt7_res_rms, SH_GSs
 
 CFG_FILE = 'ATP/atp.yaml'
 <<reading the atp config file>>
-print(cfg)
-obs = Observatory(cfg['Observatory'],cfg['Observation'])
-target = Target(obs,cfg['Observatory'])
-stars  = StarField(obs,target)
-probes  = [Probe(Quantity(k*90,'degree')) for k in range(4)]
-for k in range(len(probes)):
+#obs = Observatory(cfg['Observatory'],cfg['Observation'])
+#target = Target(obs,cfg['Observatory'])
+#stars  = StarField(obs,target)
+#probes  = []
+#for k in range(4):
+#    probes += [Probe(Quantity(k*90,'degree'))]
+#    probes[k].reachForTheStars(stars)
+agws = {'obs':None,'target':None,'stars':None,
+        'source':ColumnDataSource(data=dict(x=[],y=[],
+                                            Vmag=[],c=[],Jmag=[]))}
+probes = [Probe(Quantity(k*90,'degree')) for k in range(4)]
+"""
+tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
+tt7_gs_idx = np.argmin(tt_res_rms)
+probes  = []
+tt7_dist = []
+for k in range(4):
+    probes += [Probe(Quantity(k*90,'degree'))]
     probes[k].reachForTheStars(stars)
+    tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
+tt7_idx = np.argmin(tt7_dist)
+TT7 = probes[tt7_idx]
+TT7.gs_idx = tt7_gs_idx
+probes.pop(tt7_idx)
+"""
+
 r2a = 180*60/np.pi
 
 mlim = 18
-idx = probes[3].stars_idx#stars.R<=mlim
-Rmag = stars.R[idx]
-Jmag = stars.J[idx]
-q = np.rint((Rmag - Rmag.min())/(Rmag.max()-Rmag.min())*10)
-c = [Plasma11[int(x)] for x in q]
-source = ColumnDataSource(data=dict(x=r2a*stars.local[0,idx],
-                                    y=r2a*stars.local[1,idx],
-                                    Rmag=Rmag,c=c,Jmag=Jmag))
+#idx = probes[3].stars_idx#stars.V<=mlim
+#Vmag = stars.V#[idx]
+#Jmag = stars.J#[idx]
+#q = np.rint((Vmag - Vmag.min())/(Vmag.max()-Vmag.min())*10)
+#c = [Plasma11[int(x)] for x in q]
+#source = ColumnDataSource(data=dict(x=r2a*stars.local[0,:],
+#                                    y=r2a*stars.local[1,:],
+#                                    Vmag=Vmag,c=c,Jmag=Jmag))
 
-rotator = Toggle(label="Rotator", button_type="success" ,active=True)
+doc = curdoc()
+
+<<widgets>>
+find_tt7 = Button(label="Find GSs", button_type="default")
+def cb_find_tt7():
+    tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
+    tt7_gs_idx = np.argmin(tt_res_rms)
+    tt7_dist = []
+    for k in range(4):
+        tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
+    tt7_idx = np.argmin(tt7_dist)
+    TT7 = probes[tt7_idx]
+    TT7.gs_idx = tt7_gs_idx
+    probes.pop(tt7_idx)
+    SH_GSs(probes,stars)
+
+    p.line([r2a*TT7.local[0,0],r2a*stars.local[0,TT7.gs_idx]],
+           [r2a*TT7.local[1,0],r2a*stars.local[1,TT7.gs_idx]],
+           line_width=5,color='navy')
+    p.circle(r2a*stars.local[0,TT7.gs_idx],r2a*stars.local[1,TT7.gs_idx],
+             size=10,fill_color=None,line_color='FireBrick')
+
+    for probe in probes:
+        p.line([r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
+               [r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]],
+               line_width=5,color='navy')
+        p.circle(r2a*stars.local[0,probe.gs_idx],r2a*stars.local[1,probe.gs_idx],
+                 size=10,fill_color=None,line_color='DarkSeaGreen')
+
+find_tt7.on_click(cb_find_tt7)
 
 def update():
+    obs = agws['obs']
+    target = agws['target']
+    stars = agws['stars']
+    source = agws['source']
     obs.update()
     target.update(obs,rotator=rotator.active)
     stars.update(obs)
-    x = r2a*stars.local[0,idx]
-    y = r2a*stars.local[1,idx]
-    #print(len(x),len(y),len(Rmag),len(c))
+    x = r2a*stars.local[0,:]
+    y = r2a*stars.local[1,:]
+    #print(len(x),len(y),len(Vmag),len(c))
     source.data['x'] = x
     source.data['y'] = y
-    #new_data = {'x':x,'y':y,'Rmag':Rmag,'c':c}
+    #new_data = {'x':x,'y':y,'Vmag':Vmag,'c':c}
     #source.stream(new_data)
     p.title.text = "AGWS - "+str(obs.current_time)+\
                    ' - Alt: '+str(target.altaz.alt)+\
                    ',Az: '+str(target.altaz.az)
 
-hover = HoverTool(tooltips=[("R", "@Rmag"),("J", "@Jmag")])
-p = figure(title="AGWS - "+str(obs.current_time)+\
-           ' - Alt: '+str(target.altaz.alt)+\
-           ',Az: '+str(target.altaz.az),
-           x_range=[-20,20],y_range=[-20,20],tools=[hover])
-p.circle(x='x',y='y',color='c',size=7,source=source)
+p = figure(title='AGWS',x_range=[-25,25],y_range=[-25,25],
+           tools="pan,wheel_zoom,box_zoom,reset")
+for k in range(4):
+    p.wedge(r2a*probes[k].local[0,0],r2a*probes[k].local[1,0],radius=21,
+            start_angle=(k*90+180-26.35)*np.pi/180,
+            end_angle=(k*90+180+26.35)*np.pi/180,
+            color='navy',alpha=0.05)
+    p.circle(r2a*probes[k].local[0,0],r2a*probes[k].local[1,0],
+             size=15,color='navy')
+#p.circle(x='x',y='y',color='c',size=5,source=source,name='stars')
+p.circle(0,0,radius=3,fill_color=None,line_color='red',line_dash='dashed')
+p.circle(0,0,radius=10,fill_color=None,line_color='red',line_dash='dashed')
 p.xaxis.axis_label = "[arcmin]"
 p.yaxis.axis_label = "[arcmin]"
 
-doc = curdoc()
-doc.add_root(row(widgetbox(rotator),p))
+doc.add_root(row(widgetbox([datetime,time_res,
+                            target_name,tel_alt,tel_az,
+                            query,startstop,rotator,find_tt7]),p))
 #update()
-doc.add_periodic_callback(update,1000)
 @
+
+\subsection{Widgets}
+\label{sec:widgets}
+
+\begin{itemize}
+\item start and stop the time:
+<<widgets>>=
+startstop = Toggle(label="Start/Stop Time", button_type="default" ,active=False)
+widget_data = {'startstop':None}
+callback_id = None
+def cb_startstop(attrname, old, new):
+    global callback_id
+    print(attrname, old, new)
+    if new:
+        print('Add callback')
+        callback_id = doc.add_periodic_callback(update,1000)
+    else:
+        print('Remove callback')
+        doc.remove_periodic_callback(callback_id)
+startstop.on_change('active',cb_startstop)
+@ 
+\item the date and time (UTC)
+<<widgets>>=
+datetime = TextInput(value="2018-01-01T04:00:00.000", title="Date and time (UTC)")
+@
+\item the time resolution
+<<widgets>>=
+time_res = TextInput(value="60", title="Time resolution [s]")
+@
+\item the target name
+<<widgets>>=
+target_name = TextInput(value="None", title="Target name")
+@
+\item the telescope pointing direction (alt/az)
+<<widgets>>=
+tel_alt = TextInput(value="45", title="Telescope altitude")
+tel_az = TextInput(value="0", title="Telescope azimuth")
+@
+\item queries star
+<<widgets>>=
+query = Button(label="Query field", button_type="default")
+def cb_query():
+    agws['obs'] = Observatory(cfg['Observatory'],
+                              {'time':datetime.value,
+                               'time resolution':[float(time_res.value),'second']})
+    agws['target'] = Target(agws['obs'],{'pointing target':None,
+                                 'pointing ra/dec':None,
+                                 'pointing alt/az':{'alt':[float(tel_alt.value),'degree'],
+                                                    'az':[float(tel_az.value),'degree']}})
+    agws['stars']  = StarField(agws['obs'],agws['target'])
+    stars = agws['stars']
+    for k in range(4):
+        probes[k].reachForTheStars(stars)
+    Vmag = stars.V#[idx]
+    Jmag = stars.J#[idx]
+    q = np.rint((Vmag - Vmag.min())/(Vmag.max()-Vmag.min())*10)
+    c = [Plasma11[int(x)] for x in q]
+    src = ColumnDataSource(data=dict(x=r2a*stars.local[0,:],
+                                     y=r2a*stars.local[1,:],
+                                     Vmag=Vmag,c=c,Jmag=Jmag))
+    agws['source'].data.update(src.data)
+    p.circle(x='x',y='y',color='c',size=5,source=agws['source'],name='stars')
+    p.title.text = "AGWS - "+str(agws['obs'].current_time)+\
+                   ' - Alt: '+str(agws['target'].altaz.alt)+\
+                   ',Az: '+str(agws['target'].altaz.az)
+    p.add_tools(HoverTool(names=['stars'],tooltips=[("V", "@Vmag"),("J", "@Jmag")]))
+
+query.on_click(cb_query)
+@
+\item the GIR
+<<widgets>>=
+rotator = Toggle(label="Rotator On/Off", button_type="default" ,active=True)
+@
+\item R magnitude limit
+<<widgets opt-out>>=
+R_lim = Slider(start=np.floor(stars.V.min()),end=np.ceil(stars.V.max()),
+               value=stars.Vmag_lim,step=1,title='R magnitude limit')
+def  cb_R_lim(attrname, old, new):
+    print(attrname, old, new)
+    stars.Vmag_lim = new
+    stars.apply_constrains()
+    x = r2a*stars.local[0,:]
+    y = r2a*stars.local[1,:]
+    Vmag = stars.V#[idx]
+    Jmag = stars.J#[idx]
+    q = np.rint((Vmag - Vmag.min())/(Vmag.max()-Vmag.min())*10)
+    c = [Plasma11[int(x)] for x in q]
+    source.data['x'] = x
+    source.data['y'] = y
+    source.data['Vmag'] = Vmag
+    source.data['c'] = c
+    source.data['Jmag'] = Jmag
+R_lim.on_change('value',cb_R_lim)
+@
+\end{itemize}
     
 
 
