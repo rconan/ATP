@@ -508,100 +508,36 @@ CFG_FILE = 'ATP/atp.yaml'
 #for k in range(4):
 #    probes += [Probe(Quantity(k*90,'degree'))]
 #    probes[k].reachForTheStars(stars)
-agws = {'obs':None,'target':None,'stars':None,
+agws = {'obs':None,'target':None,'stars':None,'TT7':None,
         'probes':[Probe(Quantity(k*90,'degree')) for k in range(4)],
         'source':ColumnDataSource(data=dict(x=[],y=[],
                                             Vmag=[],c=[],Jmag=[]))}
-"""
-tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
-tt7_gs_idx = np.argmin(tt_res_rms)
-probes  = []
-tt7_dist = []
-for k in range(4):
-    probes += [Probe(Quantity(k*90,'degree'))]
-    probes[k].reachForTheStars(stars)
-    tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
-tt7_idx = np.argmin(tt7_dist)
-TT7 = probes[tt7_idx]
-TT7.gs_idx = tt7_gs_idx
-probes.pop(tt7_idx)
-"""
-
 r2a = 180*60/np.pi
-
-mlim = 18
-#idx = probes[3].stars_idx#stars.V<=mlim
-#Vmag = stars.V#[idx]
-#Jmag = stars.J#[idx]
-#q = np.rint((Vmag - Vmag.min())/(Vmag.max()-Vmag.min())*10)
-#c = [Plasma11[int(x)] for x in q]
-#source = ColumnDataSource(data=dict(x=r2a*stars.local[0,:],
-#                                    y=r2a*stars.local[1,:],
-#                                    Vmag=Vmag,c=c,Jmag=Jmag))
+probes_source = [ColumnDataSource(data=dict(px=[],py=[],tx=[],ty=[],lc=[])),
+                 ColumnDataSource(data=dict(px=[],py=[],tx=[],ty=[],lc=[])),
+                 ColumnDataSource(data=dict(px=[],py=[],tx=[],ty=[],lc=[])),
+                 ColumnDataSource(data=dict(px=[],py=[],tx=[],ty=[],lc=[]))]
 
 doc = curdoc()
 
 <<widgets>>
-find_tt7 = Button(label="Find GSs", button_type="default")
-def cb_find_tt7():
-    stars = agws['stars']
-    probes = agws['probes']
-    tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
-    tt7_gs_idx = np.argmin(tt_res_rms)
-    tt7_dist = []
-    for k in range(4):
-        tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
-    tt7_idx = np.argmin(tt7_dist)
-    TT7 = probes[tt7_idx]
-    TT7.gs_idx = tt7_gs_idx
-    probes.pop(tt7_idx)
-    SH_GSs(probes,stars)
-
-    p.line([r2a*TT7.local[0,0],r2a*stars.local[0,TT7.gs_idx]],
-           [r2a*TT7.local[1,0],r2a*stars.local[1,TT7.gs_idx]],
-           line_width=5,color='navy')
-    p.circle(r2a*stars.local[0,TT7.gs_idx],r2a*stars.local[1,TT7.gs_idx],
-             size=10,fill_color=None,line_color='FireBrick',line_width=3)
-
-    for probe in probes:
-        p.line([r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
-               [r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]],
-               line_width=5,color='navy')
-        p.circle(r2a*stars.local[0,probe.gs_idx],r2a*stars.local[1,probe.gs_idx],
-                 size=10,fill_color=None,line_color='DarkSeaGreen',line_width=3)
-
-find_tt7.on_click(cb_find_tt7)
-
-def update():
-    obs = agws['obs']
-    target = agws['target']
-    stars = agws['stars']
-    source = agws['source']
-    obs.update()
-    target.update(obs,rotator=rotator.active)
-    stars.update(obs)
-    x = r2a*stars.local[0,:]
-    y = r2a*stars.local[1,:]
-    #print(len(x),len(y),len(Vmag),len(c))
-    source.data['x'] = x
-    source.data['y'] = y
-    #new_data = {'x':x,'y':y,'Vmag':Vmag,'c':c}
-    #source.stream(new_data)
-    p.title.text = "AGWS - "+str(obs.current_time)+\
-                   ' - Alt: '+str(target.altaz.alt)+\
-                   ',Az: '+str(target.altaz.az)
 
 p = figure(title='AGWS',x_range=[-25,25],y_range=[-25,25],
            tools="pan,wheel_zoom,box_zoom,reset")
 probes = agws['probes']
 for k in range(4):
+    p.line(x='px',y='py',source=probes_source[k],
+           line_width=5,color='navy')
+    p.circle(x='tx',y='ty',line_color='lc',source=probes_source[k],
+             size=10,fill_color=None,line_width=3)
     p.wedge(r2a*probes[k].local[0,0],r2a*probes[k].local[1,0],radius=21,
             start_angle=(k*90+180-26.35)*np.pi/180,
             end_angle=(k*90+180+26.35)*np.pi/180,
             color='navy',alpha=0.05)
     p.circle(r2a*probes[k].local[0,0],r2a*probes[k].local[1,0],
              size=15,color='navy')
-p.circle(x='x',y='y',color='c',size=5,source=agws['source'],name='stars')
+p.circle(x='x',y='y',color='c',size=5,source=agws['source'],
+         alpha=0.75,name='stars')
 p.circle(0,0,radius=3,fill_color=None,line_color='red',line_dash='dashed')
 p.circle(0,0,radius=10,fill_color=None,line_color='red',line_dash='dashed')
 p.xaxis.axis_label = "[arcmin]"
@@ -622,6 +558,24 @@ doc.add_root(row(widgetbox([datetime,
 \item start and stop the time:
 <<widgets>>=
 startstop = Toggle(label="Start/Stop Time", button_type="default" ,active=False)
+def update():
+    obs = agws['obs']
+    target = agws['target']
+    stars = agws['stars']
+    source = agws['source']
+    obs.update()
+    target.update(obs,rotator=rotator.active)
+    stars.update(obs)
+    x = r2a*stars.local[0,:]
+    y = r2a*stars.local[1,:]
+    source.data['x'] = x
+    source.data['y'] = y
+    p.title.text = "AGWS - "+str(obs.current_time)+\
+                   ' - Alt: '+str(target.altaz.alt)+\
+                   ',Az: '+str(target.altaz.az)
+    for probe,probe_source in zip([agws['TT7']]+probes,probes_source):
+        probe_source.data['tx'] = [r2a*stars.local[0,probe.gs_idx]]
+        probe_source.data['ty'] = [r2a*stars.local[1,probe.gs_idx]]
 widget_data = {'startstop':None}
 callback_id = None
 def cb_startstop(attrname, old, new):
@@ -687,9 +641,58 @@ def cb_query():
 
 query.on_click(cb_query)
 @
+\item find the guide stars
+<<widgets>>=
+find_tt7 = Button(label="Find GSs", button_type="default")
+def cb_find_tt7():
+    stars = agws['stars']
+    probes = agws['probes']
+    tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
+    tt7_gs_idx = np.argmin(tt_res_rms)
+    tt7_dist = []
+    for k in range(4):
+        tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
+    tt7_idx = np.argmin(tt7_dist)
+    agws['TT7'] = probes[tt7_idx]
+    TT7 = agws['TT7']
+    TT7.gs_idx = tt7_gs_idx
+    probes.pop(tt7_idx)
+    """
+    p.line([r2a*TT7.local[0,0],r2a*stars.local[0,TT7.gs_idx]],
+           [r2a*TT7.local[1,0],r2a*stars.local[1,TT7.gs_idx]],
+           line_width=5,color='navy')
+    p.circle(r2a*stars.local[0,TT7.gs_idx],r2a*stars.local[1,TT7.gs_idx],
+             size=10,fill_color=None,line_color='FireBrick',line_width=3)
+    """
+    src = ColumnDataSource(data=dict(px=[[r2a*TT7.local[0,0],r2a*stars.local[0,TT7.gs_idx]]],
+                                     py=[[r2a*TT7.local[1,0],r2a*stars.local[1,TT7.gs_idx]]],
+                                     tx=[r2a*stars.local[0,TT7.gs_idx]],
+                                     ty=[r2a*stars.local[1,TT7.gs_idx]],
+                                     lc=['FireBrick']))
+    probes_source[0].data.update(src.data)
+
+
+    SH_GSs(probes,stars)
+    for probe,probe_source in zip(probes,probes_source[1:]):
+        """
+        p.line([r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
+               [r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]],
+               line_width=5,color='navy')
+        p.circle(r2a*stars.local[0,probe.gs_idx],r2a*stars.local[1,probe.gs_idx],
+                 size=10,fill_color=None,line_color='DarkSeaGreen',line_width=3)
+        """
+        src = ColumnDataSource(data=dict(px=[[r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]]],
+                                         py=[[r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]]],
+                                         tx=[r2a*stars.local[0,probe.gs_idx]],
+                                         ty=[r2a*stars.local[1,probe.gs_idx]],
+                                         lc=['DarkSeaGreen']))
+        probe_source.data.update(src.data)
+
+find_tt7.on_click(cb_find_tt7)
+@
 \item the GIR
 <<widgets>>=
-rotator = Toggle(label="Rotator On/Off", button_type="default" ,active=True)
+rotator = Toggle(label="Rotator On/Off", button_type="default" ,active=False)
 @
 \item R magnitude limit
 <<widgets>>=
