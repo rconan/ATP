@@ -145,14 +145,14 @@ The target is given by either the name of an astronomical object or sky coordina
 class Target:
     def __init__(self,obs,pointing_args=None,icrs=None):
         if pointing_args is not None:
-            if pointing_args['pointing target'] is not None:
+            if pointing_args['pointing target'] not in [None,'None']:
                 self.icrs  = SkyCoord.from_name(pointing_args['pointing target'],
                                                 frame='icrs')
-            if pointing_args['pointing ra/dec'] is not None:
+            elif pointing_args['pointing ra/dec'] is not None:
                 self.icrs  = SkyCoord(ra=Quantity(*pointing_args['pointing ra/dec']['ra']),
                                       dec=Quantity(*cfg['Obs keyervatory']['pointing ra/dec']['dec']),
                                       frame='icrs')
-            if pointing_args['pointing alt/az'] is not None:
+            elif pointing_args['pointing alt/az'] is not None:
                 self.altaz = SkyCoord(alt=Quantity(*pointing_args['pointing alt/az']['alt']),
                                       az=Quantity(*pointing_args['pointing alt/az']['az']),
                                       frame = obs.frame)
@@ -642,8 +642,8 @@ target_name = TextInput(value="None", title="Target name")
 @
 \item the telescope pointing direction (alt/az)
 <<widgets>>=
-tel_alt = TextInput(value="45", title="Telescope altitude")
-tel_az = TextInput(value="0", title="Telescope azimuth")
+tel_alt = TextInput(value="45", title="Telescope altitude [degree]")
+tel_az = TextInput(value="0", title="Telescope azimuth [degree]")
 @
 \item queries star
 <<widgets>>=
@@ -652,10 +652,12 @@ def cb_query():
     agws['obs'] = Observatory(cfg['Observatory'],
                               {'time':datetime.value,
                                'time resolution':[float(time_res.value),'second']})
-    agws['target'] = Target(agws['obs'],{'pointing target':None,
+    agws['target'] = Target(agws['obs'],{'pointing target':target_name.value,
                                  'pointing ra/dec':None,
                                  'pointing alt/az':{'alt':[float(tel_alt.value),'degree'],
                                                     'az':[float(tel_az.value),'degree']}})
+    tel_alt.value = "%.2f"%agws['target'].altaz.alt.value
+    tel_az.value = "%.2f"%agws['target'].altaz.az.value
     agws['stars']  = StarField(agws['obs'],agws['target'])
     stars = agws['stars']
     for k in range(4):
