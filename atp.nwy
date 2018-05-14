@@ -206,6 +206,7 @@ def Rx(a):
     return np.array([[1,0,0],[0,np.cos(a),np.sin(a)],[0,-np.sin(a),np.cos(a)]])
 class StarField:
     def __init__(self,obs,target,field=None,Vmag_lim=18,exclude_radius=Quantity(3,'arcmin'),**kwargs):
+        self.obs = obs
         self.target = target
         self.Vmag_lim = Vmag_lim
         self.exclude_radius = exclude_radius
@@ -214,8 +215,7 @@ class StarField:
             print("@(StarField)> Querying TIC ...")
             self.catalogData = Catalogs.query_region(target.icrs, radius=radius,
                                                 catalog="TIC",objType="STAR")
-            if self.apply_constrains()>0:
-                self.update(obs)
+            self.apply_constrains()
         else:
             with open(field) as fp:
                 data = yaml.load(fp)
@@ -258,13 +258,14 @@ def apply_constrains(self):
         self.icrs = SkyCoord(ra=data['ra']*units.deg,
                              dec=data['dec']*units.deg,
                              frame='icrs')
+        self.update()
     return n
 @
 The alt/az coordinates of the star are transformed in a coordinate system
 centered and aligned to the target.
 <<star field methods>>=
-def update(self,obs):
-    self.altaz = self.icrs.transform_to( obs.frame )
+def update(self,*args):
+    self.altaz = self.icrs.transform_to( self.obs.frame )
     cra = np.cos(self.altaz.az.to(units.rad))
     sra = np.sin(self.altaz.az.to(units.rad))
     cdec = np.cos(self.altaz.alt.to(units.rad))
@@ -606,7 +607,7 @@ p.yaxis.axis_label = "[arcmin]"
 
 doc.add_root(row(widgetbox([datetime,time_res,
                             target_name,tel_alt,tel_az,
-                            query,startstop,rotator,find_tt7]),p))
+                            query,V_lim,startstop,rotator,find_tt7]),p))
 #update()
 @
 
@@ -677,6 +678,9 @@ def cb_query():
                    ' - Alt: '+str(agws['target'].altaz.alt)+\
                    ',Az: '+str(agws['target'].altaz.az)
     p.add_tools(HoverTool(names=['stars'],tooltips=[("V", "@Vmag"),("J", "@Jmag")]))
+    V_lim.start = np.floor(stars.V.min())
+    V_lim.end   = np.ceil(stars.V.max())
+    V_lim.value = stars.Vmag_lim
 
 query.on_click(cb_query)
 @
@@ -685,25 +689,23 @@ query.on_click(cb_query)
 rotator = Toggle(label="Rotator On/Off", button_type="default" ,active=True)
 @
 \item R magnitude limit
-<<widgets opt-out>>=
-R_lim = Slider(start=np.floor(stars.V.min()),end=np.ceil(stars.V.max()),
-               value=stars.Vmag_lim,step=1,title='R magnitude limit')
-def  cb_R_lim(attrname, old, new):
-    print(attrname, old, new)
+<<widgets>>=
+V_lim = Slider(start=0,end=18,value=18,step=1,title='V magnitude limit')
+def  cb_V_lim(attrname, old, new):
+    stars = agws['stars']
     stars.Vmag_lim = new
     stars.apply_constrains()
-    x = r2a*stars.local[0,:]
-    y = r2a*stars.local[1,:]
+    for k in range(4):
+        probes[k].reachForTheStars(stars)
     Vmag = stars.V#[idx]
     Jmag = stars.J#[idx]
     q = np.rint((Vmag - Vmag.min())/(Vmag.max()-Vmag.min())*10)
     c = [Plasma11[int(x)] for x in q]
-    source.data['x'] = x
-    source.data['y'] = y
-    source.data['Vmag'] = Vmag
-    source.data['c'] = c
-    source.data['Jmag'] = Jmag
-R_lim.on_change('value',cb_R_lim)
+    src = ColumnDataSource(data=dict(x=r2a*stars.local[0,:],
+                                     y=r2a*stars.local[1,:],
+                                     Vmag=Vmag,c=c,Jmag=Jmag))
+    agws['source'].data.update(src.data)
+V_lim.on_change('value',cb_V_lim)
 @
 \end{itemize}
     
