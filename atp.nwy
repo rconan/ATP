@@ -330,9 +330,9 @@ def tt7_res_rms(zz,magnitude,r0 = 16e-2,L0 = 25.0,
         vs = np.array([5.6540, 5.7964, 5.8942, 6.6370, 13.2925, 34.8250, 29.4187,])
         vd = np.array([0.7798, 8.2564, 12.4752, 32.5007, 72.0987, 93.1994, 100.0507,])*np.pi/180
 
-        cex_var,err = quad(integrandSF,0,np.inf,limit=200,
+        cex_var,err = quad(integrandSF,0,np.inf,#limit=200,
                      args=(ARCMIN2RAD*zz,0,r0,wl,L0,D,altitude,fr0))
-        cey_var,err = quad(integrandSF,0,np.inf,limit=200,
+        cey_var,err = quad(integrandSF,0,np.inf,#limit=200,
                      args=(ARCMIN2RAD*zz,np.pi/2,r0,wl,L0,D,altitude,fr0))
 
         area = 357
@@ -509,9 +509,9 @@ CFG_FILE = 'ATP/atp.yaml'
 #    probes += [Probe(Quantity(k*90,'degree'))]
 #    probes[k].reachForTheStars(stars)
 agws = {'obs':None,'target':None,'stars':None,
+        'probes':[Probe(Quantity(k*90,'degree')) for k in range(4)],
         'source':ColumnDataSource(data=dict(x=[],y=[],
                                             Vmag=[],c=[],Jmag=[]))}
-probes = [Probe(Quantity(k*90,'degree')) for k in range(4)]
 """
 tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
 tt7_gs_idx = np.argmin(tt_res_rms)
@@ -545,6 +545,7 @@ doc = curdoc()
 find_tt7 = Button(label="Find GSs", button_type="default")
 def cb_find_tt7():
     stars = agws['stars']
+    probes = agws['probes']
     tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
     tt7_gs_idx = np.argmin(tt_res_rms)
     tt7_dist = []
@@ -560,14 +561,14 @@ def cb_find_tt7():
            [r2a*TT7.local[1,0],r2a*stars.local[1,TT7.gs_idx]],
            line_width=5,color='navy')
     p.circle(r2a*stars.local[0,TT7.gs_idx],r2a*stars.local[1,TT7.gs_idx],
-             size=10,fill_color=None,line_color='FireBrick')
+             size=10,fill_color=None,line_color='FireBrick',line_width=3)
 
     for probe in probes:
         p.line([r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
                [r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]],
                line_width=5,color='navy')
         p.circle(r2a*stars.local[0,probe.gs_idx],r2a*stars.local[1,probe.gs_idx],
-                 size=10,fill_color=None,line_color='DarkSeaGreen')
+                 size=10,fill_color=None,line_color='DarkSeaGreen',line_width=3)
 
 find_tt7.on_click(cb_find_tt7)
 
@@ -592,6 +593,7 @@ def update():
 
 p = figure(title='AGWS',x_range=[-25,25],y_range=[-25,25],
            tools="pan,wheel_zoom,box_zoom,reset")
+probes = agws['probes']
 for k in range(4):
     p.wedge(r2a*probes[k].local[0,0],r2a*probes[k].local[1,0],radius=21,
             start_angle=(k*90+180-26.35)*np.pi/180,
@@ -599,15 +601,17 @@ for k in range(4):
             color='navy',alpha=0.05)
     p.circle(r2a*probes[k].local[0,0],r2a*probes[k].local[1,0],
              size=15,color='navy')
-#p.circle(x='x',y='y',color='c',size=5,source=source,name='stars')
+p.circle(x='x',y='y',color='c',size=5,source=agws['source'],name='stars')
 p.circle(0,0,radius=3,fill_color=None,line_color='red',line_dash='dashed')
 p.circle(0,0,radius=10,fill_color=None,line_color='red',line_dash='dashed')
 p.xaxis.axis_label = "[arcmin]"
 p.yaxis.axis_label = "[arcmin]"
+p.add_tools(HoverTool(names=['stars'],tooltips=[("V", "@Vmag"),("J", "@Jmag")]))
 
-doc.add_root(row(widgetbox([datetime,time_res,
+doc.add_root(row(widgetbox([datetime,
                             target_name,tel_alt,tel_az,
-                            query,V_lim,startstop,rotator,find_tt7]),p))
+                            query,V_lim,find_tt7,
+                            time_res,startstop,rotator]),p))
 #update()
 @
 
@@ -659,12 +663,13 @@ def cb_query():
                                  'pointing ra/dec':None,
                                  'pointing alt/az':{'alt':[float(tel_alt.value),'degree'],
                                                     'az':[float(tel_az.value),'degree']}})
+    agws['probes'] = [Probe(Quantity(k*90,'degree')) for k in range(4)]
     tel_alt.value = "%.2f"%agws['target'].altaz.alt.value
     tel_az.value = "%.2f"%agws['target'].altaz.az.value
     agws['stars']  = StarField(agws['obs'],agws['target'])
     stars = agws['stars']
     for k in range(4):
-        probes[k].reachForTheStars(stars)
+        agws['probes'][k].reachForTheStars(stars)
     Vmag = stars.V#[idx]
     Jmag = stars.J#[idx]
     q = np.rint((Vmag - Vmag.min())/(Vmag.max()-Vmag.min())*10)
@@ -673,11 +678,9 @@ def cb_query():
                                      y=r2a*stars.local[1,:],
                                      Vmag=Vmag,c=c,Jmag=Jmag))
     agws['source'].data.update(src.data)
-    p.circle(x='x',y='y',color='c',size=5,source=agws['source'],name='stars')
     p.title.text = "AGWS - "+str(agws['obs'].current_time)+\
                    ' - Alt: '+str(agws['target'].altaz.alt)+\
                    ',Az: '+str(agws['target'].altaz.az)
-    p.add_tools(HoverTool(names=['stars'],tooltips=[("V", "@Vmag"),("J", "@Jmag")]))
     V_lim.start = np.floor(stars.V.min())
     V_lim.end   = np.ceil(stars.V.max())
     V_lim.value = stars.Vmag_lim
@@ -696,7 +699,7 @@ def  cb_V_lim(attrname, old, new):
     stars.Vmag_lim = new
     stars.apply_constrains()
     for k in range(4):
-        probes[k].reachForTheStars(stars)
+        agws['probes'][k].reachForTheStars(stars)
     Vmag = stars.V#[idx]
     Jmag = stars.J#[idx]
     q = np.rint((Vmag - Vmag.min())/(Vmag.max()-Vmag.min())*10)
