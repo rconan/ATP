@@ -34,9 +34,7 @@ if __name__ == "__main__":
 obs = Observatory(cfg['Observatory'],cfg['Observation'])
 target = Target(obs,cfg['Observatory'])
 stars  = StarField(obs,target)
-@
-<<opt-out>>=
-tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.R)]
+tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
 tt7_gs_idx = np.argmin(tt_res_rms)
 probes  = []
 tt7_dist = []
@@ -48,7 +46,7 @@ tt7_idx = np.argmin(tt7_dist)
 TT7 = probes[tt7_idx]
 TT7.gs_idx = tt7_gs_idx
 probes.pop(tt7_idx)
-SH_GSs()
+#SH_GSs()
 @
 \subsection{Configuration}
 \label{sec:config}
@@ -351,8 +349,11 @@ def tt7_res_rms(zz,magnitude,r0 = 16e-2,L0 = 25.0,
 def SH_GSs(probes,stars,min_radius=6,nTest=10):
     print('SH GSs...')
     lo = 2*np.pi/3
-    stars_xy = np.hstack([stars.local[:2,probe.stars_idx] for probe in probes])
-    R = np.hstack([stars.V[probe.stars_idx] for probe in probes])
+    mask0 = probes[0].stars_idx
+    mask0 = np.logical_or(mask0,probes[1].stars_idx)
+    mask0 = np.logical_or(mask0,probes[2].stars_idx)
+    stars_xy = stars.local[:2,mask0]
+    R = stars.V[mask0]
     stars_r = np.sqrt(np.sum(stars_xy**2,0))
     stars_o = np.arctan2(stars_xy[1,:],stars_xy[0,:])
     q = Quantity(stars_r,'rad').to('arcmin')
@@ -446,7 +447,7 @@ def SH_GSs(probes,stars,min_radius=6,nTest=10):
     id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
     ids = [id1]+id2
     print(stars_r[mask][ids],stars_o[mask][ids],R[mask][ids])
-    for uid in ids:
+    for uid in np.where(mask0)[0][mask][ids]:
         probe_id = np.argmin([stars.distanceFrom(Quantity(probe.local,'rad'),
                                                  star_idx=[uid],u='arcmin') for probe in probes])
         probes[probe_id].gs_idx = uid
@@ -542,6 +543,7 @@ doc = curdoc()
 <<widgets>>
 find_tt7 = Button(label="Find GSs", button_type="default")
 def cb_find_tt7():
+    stars = agws['stars']
     tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
     tt7_gs_idx = np.argmin(tt_res_rms)
     tt7_dist = []
