@@ -2,7 +2,11 @@
 \section{Introduction}
 \label{sec:introduction}
 
-This report describes the method to choose the guide stars (GS) of the AGWS.
+The AGWS requires the use of 4 guide stars (GS).
+AGWS Target Practice (ATP) is an application program interface allowing to model
+the sky as viewed by the AGWS.
+It also implements the routines to find the most suitable GSs for the AGWS in the different
+modes of operation of the telescope.
 
 \section{Installation}
 \label{sec:installation}
@@ -34,14 +38,16 @@ if __name__ == "__main__":
 obs = Observatory(cfg['Observatory'],cfg['Observation'])
 target = Target(obs,cfg['Observatory'])
 stars  = StarField(obs,target)
-tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
+tt_res_rms = [tt7_res_rms(zz,magnitude) \
+              for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
 tt7_gs_idx = np.argmin(tt_res_rms)
 probes  = []
 tt7_dist = []
 for k in range(4):
     probes += [Probe(Quantity(k*90,'degree'))]
     probes[k].reachForTheStars(stars)
-    tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
+    tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),
+                                    star_idx=[tt7_gs_idx],u='arcmin')]
 tt7_idx = np.argmin(tt7_dist)
 TT7 = probes[tt7_idx]
 TT7.gs_idx = tt7_gs_idx
@@ -138,17 +144,18 @@ def sidereal_time(self):
 \label{sec:target}
 
 The target defines the direction the telescope is pointing at.
-The target is given by either the name of an astronomical object or sky coordinates in ra/dec or alt/az.
+The target is defined by either the name of an astronomical object or sky coordinates in ra/dec or alt/az.
 <<target>>=
 class Target:
     def __init__(self,obs,pointing_args=None,icrs=None):
+        self.obs = obs
         if pointing_args is not None:
             if pointing_args['pointing target'] not in [None,'None']:
                 self.icrs  = SkyCoord.from_name(pointing_args['pointing target'],
                                                 frame='icrs')
             elif pointing_args['pointing ra/dec'] is not None:
                 self.icrs  = SkyCoord(ra=Quantity(*pointing_args['pointing ra/dec']['ra']),
-                                      dec=Quantity(*cfg['Obs keyervatory']['pointing ra/dec']['dec']),
+                                      dec=Quantity(*pointing_args['pointing ra/dec']['dec']),
                                       frame='icrs')
             elif pointing_args['pointing alt/az'] is not None:
                 self.altaz = SkyCoord(alt=Quantity(*pointing_args['pointing alt/az']['alt']),
@@ -158,23 +165,31 @@ class Target:
         if icrs is not None:
             self.icrs = icrs
         self.rotator_angle = Quantity(0,'degree')
-        self.update(obs,rotator=False)
+        self.update(rotator=False)
         print("@(Target)>")
         print(self.icrs)
         print(self.altaz)
 
-    def update(self,obs,rotator=True):
-        self.altaz = self.icrs.transform_to( obs.frame )
-        H = (obs.sidereal_time.to(units.rad) - self.icrs.ra.to(units.rad)).value
-        D = self.icrs.dec.to(units.rad).value
-        L = obs.location.lat.to(units.rad).value
-        self.parallactic_angle = Quantity(np.arctan2( np.sin(L)*np.cos(D) - np.cos(L)*np.cos(H)*np.sin(D) ,
-                                            -np.cos(L)*np.sin(H) ) , 'deg')
-        if rotator:
-            self.rotator_angle += np.cos(obs.location.lat)*np.cos(self.altaz.az)/\
-                                  np.cos(self.altaz.alt)*obs.time_resolution.to('s').value*\
-                                  Quantity(15,'degree')/3600
+    <<target method>>
 @ %def Target
+The [[update]] method updates the alt/az coordinates of the target along with
+the parallactic angle and the rotator angle according to observatory current
+time.
+<<target method>>=
+def update(self,rotator=True):
+    self.altaz = self.icrs.transform_to( self.obs.frame )
+    H = (self.obs.sidereal_time.to(units.rad) - self.icrs.ra.to(units.rad)).value
+    D = self.icrs.dec.to(units.rad).value
+    L = self.obs.location.lat.to(units.rad).value
+    self.parallactic_angle = Quantity(np.arctan2( np.sin(L)*np.cos(D) - \
+                                                  np.cos(L)*np.cos(H)*np.sin(D) ,
+                                                  -np.cos(L)*np.sin(H) ) , 'deg')
+    if rotator:
+        self.rotator_angle += np.cos(self.obs.location.lat)*np.cos(self.altaz.az)/\
+                              np.cos(self.altaz.alt)*\
+                              self.obs.time_resolution.to('s').value*\
+                              Quantity(15,'degree')/3600
+@
 
 \section{AGWS Star Field}
 \label{sec:star-field}
@@ -188,7 +203,7 @@ STAR CATALOG:
 An AGWS star field is read from the TESS Input Catalogue (TIC\footnote{\url{https://tess.mit.edu/data/tess-input-catalogue/}}).
 A 10 arcmin radius circular region is queried from the catalogue centered on either a given target or a given sky alt/az coordinate.
 An observation date and time must also be specified.
-The data is further reduced to objects that have both a magnitude in R and J bands.
+The data is further reduced to objects that have both a magnitude in V and J bands.
 <<module imports>>=
 import numpy as np
 from astroquery.mast import Catalogs
@@ -205,7 +220,8 @@ def Ry(b):
 def Rx(a):
     return np.array([[1,0,0],[0,np.cos(a),np.sin(a)],[0,-np.sin(a),np.cos(a)]])
 class StarField:
-    def __init__(self,obs,target,field=None,Vmag_lim=18,exclude_radius=Quantity(3,'arcmin'),**kwargs):
+    def __init__(self,obs,target,field=None,Vmag_lim=18,
+                 exclude_radius=Quantity(3,'arcmin'),**kwargs):
         self.obs = obs
         self.target = target
         self.Vmag_lim = Vmag_lim
@@ -253,8 +269,10 @@ def apply_constrains(self):
     n = mask.sum()
     print('@(StarField)> Entries with both V and J magnitude #',n)
     if n>0:
-        print('@(StarField)> V magnitude range [{0},{1}]'.format(self.V.min(),self.V.max()))
-        print('@(StarField)> J magnitude range [{0},{1}]'.format(self.J.min(),self.J.max()))
+        print('@(StarField)> V magnitude range [{0},{1}]'.\
+              format(self.V.min(),self.V.max()))
+        print('@(StarField)> J magnitude range [{0},{1}]'.\
+              format(self.J.min(),self.J.max()))
         self.icrs = SkyCoord(ra=data['ra']*units.deg,
                              dec=data['dec']*units.deg,
                              frame='icrs')
@@ -281,8 +299,10 @@ def update(self,*args):
     self.local = R @ v
 @
 <<star field methods>>=
-def distanceFrom(self,origin=Quantity([[0.0],[0.0]],'arcmin'),star_idx=np.s_[:],u=None):
-    dist = np.sqrt(np.sum((self.local[:2,star_idx]-origin.to(units.rad).value)**2,0))
+def distanceFrom(self,origin=Quantity([[0.0],[0.0]],'arcmin'),
+                 star_idx=np.s_[:],u=None):
+    dist = np.sqrt(np.sum((self.local[:2,star_idx]-\
+                           origin.to(units.rad).value)**2,0))
     if u is not None:
         dist = Quantity(dist,units.rad).to(u)
     return dist
@@ -501,13 +521,6 @@ from atp import Observatory, Target, StarField, Probe, tt7_res_rms, SH_GSs
 
 CFG_FILE = __file__.replace('main.py','atp.yaml')
 <<reading the atp config file>>
-#obs = Observatory(cfg['Observatory'],cfg['Observation'])
-#target = Target(obs,cfg['Observatory'])
-#stars  = StarField(obs,target)
-#probes  = []
-#for k in range(4):
-#    probes += [Probe(Quantity(k*90,'degree'))]
-#    probes[k].reachForTheStars(stars)
 agws = {'obs':None,'target':None,'stars':None,'TT7':None,
         'probes':[Probe(Quantity(k*90,'degree')) for k in range(4)],
         'source':ColumnDataSource(data=dict(x=[],y=[],
@@ -565,8 +578,8 @@ def update():
     source = agws['source']
     probes = [agws['TT7']]+agws['probes']
     obs.update()
-    target.update(obs,rotator=rotator.active)
-    stars.update(obs)
+    target.update(rotator=rotator.active)
+    stars.update()
     x = r2a*stars.local[0,:]
     y = r2a*stars.local[1,:]
     source.data.update(dict(x=x,y=y))
