@@ -499,7 +499,7 @@ import yaml
 from astropy.units import Quantity
 from atp import Observatory, Target, StarField, Probe, tt7_res_rms, SH_GSs
 
-CFG_FILE = 'ATP/atp.yaml'
+CFG_FILE = __file__.replace('main.py','atp.yaml')
 <<reading the atp config file>>
 #obs = Observatory(cfg['Observatory'],cfg['Observation'])
 #target = Target(obs,cfg['Observatory'])
