@@ -513,10 +513,10 @@ agws = {'obs':None,'target':None,'stars':None,'TT7':None,
         'source':ColumnDataSource(data=dict(x=[],y=[],
                                             Vmag=[],c=[],Jmag=[]))}
 r2a = 180*60/np.pi
-probes_source = [ColumnDataSource(data=dict(px=[],py=[],tx=[],ty=[],lc=[])),
-                 ColumnDataSource(data=dict(px=[],py=[],tx=[],ty=[],lc=[])),
-                 ColumnDataSource(data=dict(px=[],py=[],tx=[],ty=[],lc=[])),
-                 ColumnDataSource(data=dict(px=[],py=[],tx=[],ty=[],lc=[]))]
+probes_sources = {'mirror':[],'stage':[]}
+for k in range(4):
+    probes_sources['mirror'] += [ColumnDataSource(data=dict(tx=[],ty=[],lc=[]))]
+    probes_sources['stage']  += [ColumnDataSource(data=dict(px=[],py=[]))]
 
 doc = curdoc()
 
@@ -526,9 +526,9 @@ p = figure(title='AGWS',x_range=[-25,25],y_range=[-25,25],
            tools="pan,wheel_zoom,box_zoom,reset")
 probes = agws['probes']
 for k in range(4):
-    p.line(x='px',y='py',source=probes_source[k],
+    p.line(x='px',y='py',source=probes_sources['stage'][k],
            line_width=5,color='navy')
-    p.circle(x='tx',y='ty',line_color='lc',source=probes_source[k],
+    p.circle(x='tx',y='ty',line_color='lc',source=probes_sources['mirror'][k],
              size=10,fill_color=None,line_width=3)
     p.wedge(r2a*probes[k].local[0,0],r2a*probes[k].local[1,0],radius=21,
             start_angle=(k*90+180-26.35)*np.pi/180,
@@ -563,19 +563,36 @@ def update():
     target = agws['target']
     stars = agws['stars']
     source = agws['source']
+    probes = [agws['TT7']]+agws['probes']
     obs.update()
     target.update(obs,rotator=rotator.active)
     stars.update(obs)
     x = r2a*stars.local[0,:]
     y = r2a*stars.local[1,:]
-    source.data['x'] = x
-    source.data['y'] = y
+    source.data.update(dict(x=x,y=y))
     p.title.text = "AGWS - "+str(obs.current_time)+\
                    ' - Alt: '+str(target.altaz.alt)+\
                    ',Az: '+str(target.altaz.az)
-    for probe,probe_source in zip([agws['TT7']]+probes,probes_source):
-        probe_source.data['tx'] = [r2a*stars.local[0,probe.gs_idx]]
-        probe_source.data['ty'] = [r2a*stars.local[1,probe.gs_idx]]
+    for probe,mirror,stage in zip(probes,probes_sources['mirror'],probes_sources['stage']):
+        """
+        p.line([r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
+               [r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]],
+               line_width=5,color='navy')
+        p.circle(r2a*stars.local[0,probe.gs_idx],r2a*stars.local[1,probe.gs_idx],
+                 size=10,fill_color=None,line_color='DarkSeaGreen',line_width=3)
+        """
+        src = ColumnDataSource(data=dict(tx=[r2a*stars.local[0,probe.gs_idx]],
+                                         ty=[r2a*stars.local[1,probe.gs_idx]],
+                                         lc=['DarkSeaGreen']))
+        data = dict(tx=[r2a*stars.local[0,probe.gs_idx]],
+                    ty=[r2a*stars.local[1,probe.gs_idx]])
+        mirror.data.update(data)
+        data = dict(px=[r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
+                    py=[r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]])
+        stage.data.update(data)
+
+        
+
 widget_data = {'startstop':None}
 callback_id = None
 def cb_startstop(attrname, old, new):
@@ -618,6 +635,11 @@ def cb_query():
                                  'pointing alt/az':{'alt':[float(tel_alt.value),'degree'],
                                                     'az':[float(tel_az.value),'degree']}})
     agws['probes'] = [Probe(Quantity(k*90,'degree')) for k in range(4)]
+    #probes_sources['mirror'] = []
+    #probes_sources['stage'] = []
+    #for k in range(4):
+    #    probes_sources['mirror'] += [ColumnDataSource(data=dict(tx=[],ty=[],lc=[]))]
+    #    probes_sources['stage']  += [ColumnDataSource(data=dict(px=[],py=[]))]
     tel_alt.value = "%.2f"%agws['target'].altaz.alt.value
     tel_az.value = "%.2f"%agws['target'].altaz.az.value
     agws['stars']  = StarField(agws['obs'],agws['target'])
@@ -664,16 +686,13 @@ def cb_find_tt7():
     p.circle(r2a*stars.local[0,TT7.gs_idx],r2a*stars.local[1,TT7.gs_idx],
              size=10,fill_color=None,line_color='FireBrick',line_width=3)
     """
-    src = ColumnDataSource(data=dict(px=[[r2a*TT7.local[0,0],r2a*stars.local[0,TT7.gs_idx]]],
-                                     py=[[r2a*TT7.local[1,0],r2a*stars.local[1,TT7.gs_idx]]],
-                                     tx=[r2a*stars.local[0,TT7.gs_idx]],
-                                     ty=[r2a*stars.local[1,TT7.gs_idx]],
-                                     lc=['FireBrick']))
-    probes_source[0].data.update(src.data)
-
-
     SH_GSs(probes,stars)
-    for probe,probe_source in zip(probes,probes_source[1:]):
+
+    probes = [TT7]+probes
+    for probe,mirror,stage,c in zip(probes,
+                                    probes_sources['mirror'],
+                                    probes_sources['stage'],
+                                    ['FireBrick']+['DarkSeaGreen']*3):
         """
         p.line([r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
                [r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]],
@@ -681,12 +700,13 @@ def cb_find_tt7():
         p.circle(r2a*stars.local[0,probe.gs_idx],r2a*stars.local[1,probe.gs_idx],
                  size=10,fill_color=None,line_color='DarkSeaGreen',line_width=3)
         """
-        src = ColumnDataSource(data=dict(px=[[r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]]],
-                                         py=[[r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]]],
-                                         tx=[r2a*stars.local[0,probe.gs_idx]],
+        src = ColumnDataSource(data=dict(tx=[r2a*stars.local[0,probe.gs_idx]],
                                          ty=[r2a*stars.local[1,probe.gs_idx]],
-                                         lc=['DarkSeaGreen']))
-        probe_source.data.update(src.data)
+                                         lc=[c]))
+        mirror.data.update(src.data)
+        src = ColumnDataSource(data=dict(px=[r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
+                                         py=[r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]]))
+        stage.data.update(src.data)
 
 find_tt7.on_click(cb_find_tt7)
 @
