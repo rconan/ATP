@@ -11,108 +11,57 @@ modes of operation of the telescope.
 \section{Installation}
 \label{sec:installation}
 
-\section{Implementation}
+\section{ATP implementation}
 \label{sec:implementation}
 
-The main python module is
-<<atp.py>>=
-<<module imports>>
-import ceo
-from datetime import datetime
-RAD2MAS = 180*3600e3/np.pi
-RAD2ARCSEC = 180*3600/np.pi
-ARCMIN2RAD = np.pi/180/60
-<<TT7 performance estimator>>
-<<SH GSs>>
-<<observatory>>
-<<target>>
-<<star field>>
-<<probe>>
+The classes and functions used to generate the AGWS field--of--view and to
+derive the suitable GSs are gathered in the [[atp.py]] module.
+The model parameters are all written in a single yaml file \footnote{\url{yaml.org}}.
+A graphical user interface (GUI) written is the module [[main.py]] is used to
+visualize the field--of--view and the probes.
 
-if __name__ == "__main__":
-    CFG_FILE = 'atp.yaml'
-    <<atp main>>
-@ with
-<<atp main>>=
-<<reading the atp config file>>
-obs = Observatory(cfg['Observatory'],cfg['Observation'])
-target = Target(obs,cfg['Observatory'])
-stars  = StarField(obs,target)
-tt_res_rms = [tt7_res_rms(zz,magnitude) \
-              for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
-tt7_gs_idx = np.argmin(tt_res_rms)
-probes  = []
-tt7_dist = []
-for k in range(4):
-    probes += [Probe(Quantity(k*90,'degree'))]
-    probes[k].reachForTheStars(stars)
-    tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),
-                                    star_idx=[tt7_gs_idx],u='arcmin')]
-tt7_idx = np.argmin(tt7_dist)
-TT7 = probes[tt7_idx]
-TT7.gs_idx = tt7_gs_idx
-probes.pop(tt7_idx)
-#SH_GSs()
-@
-\subsection{Configuration}
-\label{sec:config}
+The ATP simulator contains 5 main components: the
+observation (Section~\ref{sec:observation}), the observatory (Section~\ref{sec:gmt}),
+the target (Section~\ref{sec:target}), the star field
+(Section~\ref{sec:star-field}) and the 4 AGWS probes (Section \ref{sec:probes}).
+A section of the yaml parameter file is dedicated to each component.
+Some components are also implemented as a python class.
 
-<<atp.yaml>>=
-<<Observation config>>
-<<Observatory config>>
-<<Star field config>>
-@
-The configuration file is read with:
-<<module imports>>=
-import yaml
-@
-<<reading the atp config file>>=
-with open(CFG_FILE) as fp:
-    cfg = yaml.load(fp)
-@ %def cfg
-
-
-\section{Observation}
+\subsection{Observation}
 \label{sec:observation}
 
-The observation date and UTC time must be given.
-The time resolution of the observation is used as the sampling time of the simulation.
+An observation is defined by a date and time (UTC) at which the observation is
+supposed to start, the duration of the observation and the sampling time of the observation.
 
-<<Observation config>>=
+<<ATP parameters>>=
 Observation:
-   time: '2018-01-01T00:00:00'
-   time resolution: [60,'second']
+  time: '2018-01-01T04:00:00'
+  time resolution: [60,'second']
+  duration: [null,'second']
 @ 
-\section{The Observatory}
+\subsection{Observatory}
 \label{sec:gmt}
 
-The observatory coordinates are:
-
-<<Observatory config>>=
+The geodetic coordinates of the telescope are set in the parameter file:
+<<ATP parameters>>=
 Observatory:
-   latitude: [-29.049,'degree']
-   longitude:  [-70.682,'degree']
-   height: [2514,'meter']
-   pointing target: null
-   pointing ra/dec: null
-   pointing alt/az:
-      alt: [45,'degree']
-      az: [0,'degree']
-   pointing accuracy: null
+  latitude: [-29.049,'degree']
+  longitude:  [-70.682,'degree']
+  height: [2514,'meter']
 @
-The [[Observatory]] class contains the geodetic coordinates of the telescope and the
-observation date, time and time resolution.
+The [[Observatory]] class is set with the observation parameters and the geodetic coordinates of
+the telescope.
 <<observatory>>=
 class Observatory:
-    def __init__(self,observatory_args,observation_args):
-        self.location = EarthLocation(lat=Quantity(*observatory_args['latitude']),
-                                      lon=Quantity(*observatory_args['longitude']),
-                                      height=Quantity(*observatory_args['height']))
-        self.start_time = Time(observation_args['time'])
-        self.current_time  = Time(observation_args['time'])
+    def __init__(self,**kwargs):
+        self.location = EarthLocation(lat=Quantity(*kwargs['latitude']),
+                                      lon=Quantity(*kwargs['longitude']),
+                                      height=Quantity(*kwargs['height']))
+        self.start_time = Time(kwargs['time'])
+        self.current_time  = Time(kwargs['time'])
         if self.current_time is None:
             self.current_time = Time(datetime.now())
-        self.time_resolution = Quantity(*observation_args['time resolution'])
+        self.time_resolution = Quantity(*kwargs['time resolution'])
         print(str(self))
 
     def __str__(self):
@@ -139,32 +88,41 @@ The sidereal time is obtained from the [[sidereal_time]] property:
 def sidereal_time(self):
     return self.current_time.sidereal_time('apparent',self.location.lon)
 @
-
-\section{Target}
+\subsection{Target}
 \label{sec:target}
 
-The target defines the direction the telescope is pointing at.
-The target is defined by either the name of an astronomical object or sky coordinates in ra/dec or alt/az.
+The target object defines the direction the telescope is pointing at.
+The target is defined by an [[Observatory]] object and the 3 pointing
+coordinates.
+The pointing coordinates are either the name of an astronomical object or the sky
+coordinates given in either ra/dec or alt/az and the rotator angle.
+<<ATP parameters>>=
+Target:  
+  pointing target: null
+  pointing ra/dec: null
+  pointing alt/az:
+    alt: [45,'degree']
+    az: [0,'degree']
+  pointing accuracy: null
+  rotator angle: [0,'degree']
+@
 <<target>>=
 class Target:
-    def __init__(self,obs,pointing_args=None,icrs=None):
+    def __init__(self,obs,**kwargs):
         self.obs = obs
-        if pointing_args is not None:
-            if pointing_args['pointing target'] not in [None,'None']:
-                self.icrs  = SkyCoord.from_name(pointing_args['pointing target'],
-                                                frame='icrs')
-            elif pointing_args['pointing ra/dec'] is not None:
-                self.icrs  = SkyCoord(ra=Quantity(*pointing_args['pointing ra/dec']['ra']),
-                                      dec=Quantity(*pointing_args['pointing ra/dec']['dec']),
-                                      frame='icrs')
-            elif pointing_args['pointing alt/az'] is not None:
-                self.altaz = SkyCoord(alt=Quantity(*pointing_args['pointing alt/az']['alt']),
-                                      az=Quantity(*pointing_args['pointing alt/az']['az']),
-                                      frame = obs.frame)
-                self.icrs  = self.altaz.transform_to( ICRS() )
-        if icrs is not None:
-            self.icrs = icrs
-        self.rotator_angle = Quantity(0,'degree')
+        if kwargs['pointing target'] not in [None,'None']:
+            self.icrs  = SkyCoord.from_name(kwargs['pointing target'],
+                                            frame='icrs')
+        if kwargs['pointing ra/dec'] is not None:
+            self.icrs  = SkyCoord(ra=Quantity(*kwargs['pointing ra/dec']['ra']),
+                                  dec=Quantity(*kwargs['pointing ra/dec']['dec']),
+                                  frame='icrs')
+        if kwargs['pointing alt/az'] is not None:
+            self.altaz = SkyCoord(alt=Quantity(*kwargs['pointing alt/az']['alt']),
+                                  az=Quantity(*kwargs['pointing alt/az']['az']),
+                                  frame = obs.frame)
+            self.icrs  = self.altaz.transform_to( ICRS() )
+        self.rotator_angle = Quantity(*kwargs['rotator angle'])
         self.update(rotator=False)
         print("@(Target)>")
         print(self.icrs)
@@ -190,42 +148,30 @@ def update(self,rotator=True):
                               self.obs.time_resolution.to('s').value*\
                               Quantity(15,'degree')/3600
 @
-
-\section{AGWS Star Field}
+\subsection{AGWS Star Field}
 \label{sec:star-field}
 
-<<Star field config>>=
-STAR CATALOG:
+The parameters associated to the star field are the star position error rms, an
+excluded region specified by its radius and the V band magnitude limit.
+<<ATP parameters>>=
+Star Catalog:
   ra/dec error rms: null
   exclude radius: [3,'arcmin']
-  R magnitude limit: 18
+  V magnitude limit: 18
 @
-An AGWS star field is read from the TESS Input Catalogue (TIC\footnote{\url{https://tess.mit.edu/data/tess-input-catalogue/}}).
-A 10 arcmin radius circular region is queried from the catalogue centered on either a given target or a given sky alt/az coordinate.
-An observation date and time must also be specified.
+The AGWS star field is read from the TESS Input Catalogue (TIC\footnote{\url{https://tess.mit.edu/data/tess-input-catalogue/}}).
+A 10 arcmin radius circular region is queried from the catalogue centered on
+a given sky coordinate specified by the [[target]] object.
+The observation and observatory parameters are passed along with the [[obs]] object.
 The data is further reduced to objects that have both a magnitude in V and J bands.
-<<module imports>>=
-import numpy as np
-from astroquery.mast import Catalogs
-import astropy.units as units
-from astropy.units import Quantity
-from astropy.time import Time
-from astropy.coordinates import SkyCoord, EarthLocation, ICRS, AltAz
 @ 
 <<star field>>=
-def Rz(c):
-    return np.array([[np.cos(c),np.sin(c),0],[-np.sin(c),np.cos(c),0],[0,0,1]])
-def Ry(b):
-    return np.array([[np.cos(b),0,-np.sin(b)],[0,1,0],[np.sin(b),0,np.cos(b)]])
-def Rx(a):
-    return np.array([[1,0,0],[0,np.cos(a),np.sin(a)],[0,-np.sin(a),np.cos(a)]])
 class StarField:
-    def __init__(self,obs,target,field=None,Vmag_lim=18,
-                 exclude_radius=Quantity(3,'arcmin'),**kwargs):
+    def __init__(self,obs,target,field=None,**kwargs):
         self.obs = obs
         self.target = target
-        self.Vmag_lim = Vmag_lim
-        self.exclude_radius = exclude_radius
+        self.Vmag_lim = kwargs['V magnitude limit']
+        self.exclude_radius = Quantity(*kwargs['exclude radius'])
         if field is None:
             radius = Quantity(10,units.arcminute)
             print("@(StarField)> Querying TIC ...")
@@ -244,25 +190,37 @@ class StarField:
             self.update(obs)
 
     <<star field methods>>
+@ %def StarField
+The data in the catalog is further processed based on a set of criteria that the
+stars must fulfilled:
+\begin{enumerate}
+\item the stars inside the excluded disc are filtered out:
+<<star field criteria>>=
+if self.exclude_radius is not None:
+    uu = self.catalogData['ra']*units.deg - self.target.icrs.ra
+    vv = self.catalogData['dec']*units.deg - self.target.icrs.dec
+    mask = np.hypot(uu,vv) > self.exclude_radius
+    print('@(StarField)> Entries accessible #',mask.sum())
 @
+\item both V and J magnitude must be available:
+<<star field criteria>>= 
+Vmag = np.array(self.catalogData['Vmag'])
+Jmag = np.array(self.catalogData['Jmag'])
+_mask_ = np.logical_and(~np.isnan(Vmag),~np.isnan(Jmag))
+mask = np.logical_and(mask,_mask_)
+@
+\item the stars fainter that the given V band magnitude limit are rejected:
+<<star field criteria>>= 
+Vmag[np.isnan(Vmag)] = self.Vmag_lim+1
+_mask_ = Vmag<=self.Vmag_lim
+mask = np.logical_and(mask,_mask_)
+@
+\end{enumerate}
+The selection criteria are enforced with the [[apply_constrains]] method: 
 <<star field methods>>=
 def apply_constrains(self):
     print('@(StarField)> Catalog entry #',len(self.catalogData))
-    if self.exclude_radius is not None:
-        uu = self.catalogData['ra']*units.deg - self.target.icrs.ra
-        vv = self.catalogData['dec']*units.deg - self.target.icrs.dec
-        mask = np.hypot(uu,vv) > self.exclude_radius
-        print('@(StarField)> Entries accessible #',mask.sum())
-    Vmag = np.array(self.catalogData['Vmag'])
-    Jmag = np.array(self.catalogData['Jmag'])
-
-    _mask_ = np.logical_and(~np.isnan(Vmag),~np.isnan(Jmag))
-    mask = np.logical_and(mask,_mask_)
-
-    Vmag[np.isnan(Vmag)] = self.Vmag_lim+1
-    _mask_ = Vmag<=self.Vmag_lim
-    mask = np.logical_and(mask,_mask_)
-
+    <<star field criteria>>
     self.V = Vmag[mask]
     self.J = Jmag[mask]
     data = self.catalogData[mask]
@@ -277,10 +235,12 @@ def apply_constrains(self):
                              dec=data['dec']*units.deg,
                              frame='icrs')
         self.update()
+    else:
+        print('No stars meet the criteria!')
     return n
 @
 The alt/az coordinates of the star are transformed in a coordinate system
-centered and aligned to the target.
+centered and aligned with respect to the target.
 <<star field methods>>=
 def update(self,*args):
     self.altaz = self.icrs.transform_to( self.obs.frame )
@@ -298,6 +258,18 @@ def update(self,*args):
     v = np.array(np.vstack([x,y,z]))
     self.local = R @ v
 @
+The [[update]] method uses rotation matrices to transform the coordinate of the star into
+the AGWS \emph{local} coordinate system.
+The matrix are defined with the following functions:
+<<rotation matrices>>=
+def Rz(c):
+    return np.array([[np.cos(c),np.sin(c),0],[-np.sin(c),np.cos(c),0],[0,0,1]])
+def Ry(b):
+    return np.array([[np.cos(b),0,-np.sin(b)],[0,1,0],[np.sin(b),0,np.cos(b)]])
+def Rx(a):
+    return np.array([[1,0,0],[0,np.cos(a),np.sin(a)],[0,-np.sin(a),np.cos(a)]])
+@
+The distance from the stars to a given point in the field is computed with:
 <<star field methods>>=
 def distanceFrom(self,origin=Quantity([[0.0],[0.0]],'arcmin'),
                  star_idx=np.s_[:],u=None):
@@ -306,188 +278,26 @@ def distanceFrom(self,origin=Quantity([[0.0],[0.0]],'arcmin'),
     if u is not None:
         dist = Quantity(dist,units.rad).to(u)
     return dist
-@ %def StarField
-
-\section{TT7 rms residual error}
-\label{sec:tt7}
-
-<<TT7 performance estimator>>=
-from scipy.special import j0, j1, jn, gamma
-from scipy.integrate import quad
-def tt7_res_rms(zz,magnitude,r0 = 16e-2,L0 = 25.0,
-                zenith_distance = 30*np.pi/180,
-                wfs_camera_exposureTime=1/200):
-    if magnitude>14:
-        return np.Inf
-    else:
-        def G(_f_,D):
-            f = np.array(_f_)
-            out = np.ones_like(f)
-            idx = f!=0
-            red = np.pi*D*f[idx]
-            out[idx] = (2*j1(red)/red)**2
-            return out
-        def integrandSF(f,theta,gam,r0,wl,L0,D,altitude,fr0):
-            f0 = 1.0/L0
-            cst = np.pi*gamma(11./6.)**2/(2*np.pi**(11./3.))*(24*gamma(6./5.)/5)**(5./6.)
-            cst *= wl**2*r0**(-5.0/3.0)*RAD2MAS**2
-            sum = 0.0
-            for k in range(altitude.size):
-                rho = theta*altitude[k]
-                red = 2*np.pi*rho*f
-                sum += fr0[k]*f**3*(f**2+f0**2)**(-11.0/6.0)*G(f,D)*\
-                   ( 1 - j0(red) + np.cos(2*gam)*jn(2,red) )
-            return 2*cst*sum
-        D = 25.5
-        r0_wavelength = 500e-9
-        gs_wavelength = 715e-9
-        r0 = r0*(gs_wavelength/r0_wavelength)**1.2
-        r0 = (r0**(-5./3.)/np.cos(zenith_distance))**(-3./5.)
-        seeingArcsec = gs_wavelength/r0*RAD2ARCSEC
-        wl = gs_wavelength
-        altitude = np.array([25, 275, 425, 1250, 4000, 8000, 13000,])
-        fr0 = np.array([0.1257, 0.0874, 0.0666, 0.3498, 0.2273, 0.0681, 0.0751,])
-        vs = np.array([5.6540, 5.7964, 5.8942, 6.6370, 13.2925, 34.8250, 29.4187,])
-        vd = np.array([0.7798, 8.2564, 12.4752, 32.5007, 72.0987, 93.1994, 100.0507,])*np.pi/180
-
-        cex_var,err = quad(integrandSF,0,np.inf,#limit=200,
-                     args=(ARCMIN2RAD*zz,0,r0,wl,L0,D,altitude,fr0))
-        cey_var,err = quad(integrandSF,0,np.inf,#limit=200,
-                     args=(ARCMIN2RAD*zz,np.pi/2,r0,wl,L0,D,altitude,fr0))
-
-        area = 357
-        wfs_camera_photoelectron_gain = 0.8*0.48
-        gs_nPhoton = 9e12*10**(-0.4*magnitude)
-        nPhLenslet = wfs_camera_exposureTime*wfs_camera_photoelectron_gain*gs_nPhoton
-        photon_noise_rms = 1e3*seeingArcsec/np.sqrt(2*np.log(2)*nPhLenslet)
-
-        return np.sqrt(np.sum([cex_var,cey_var,2*photon_noise_rms**2]))
 @
-\section{Shack--Hartmann guide stars}
-\label{sec:sh-gs}
-
-<<SH GSs>>=
-def SH_GSs(probes,stars,min_radius=6,nTest=10):
-    print('SH GSs...')
-    lo = 2*np.pi/3
-    mask0 = probes[0].stars_idx
-    mask0 = np.logical_or(mask0,probes[1].stars_idx)
-    mask0 = np.logical_or(mask0,probes[2].stars_idx)
-    stars_xy = stars.local[:2,mask0]
-    R = stars.V[mask0]
-    stars_r = np.sqrt(np.sum(stars_xy**2,0))
-    stars_o = np.arctan2(stars_xy[1,:],stars_xy[0,:])
-    q = Quantity(stars_r,'rad').to('arcmin')
-    mask = np.logical_and(q>Quantity(min_radius,'arcmin'),q<=Quantity(10,'arcmin'))
-    Rmin = []
-    az_dist = []
-    q = stars_o[mask]
-    for c,_q_ in enumerate(q):
-        qc = q - _q_
-        id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
-        az_dist += [np.abs(qc[id2].sum())]
-        Rmin += [np.min(R[mask][[c]+id2])]
-    L=25.5
-    nPx = 101
-    nLenslet = 48
-    gmt = ceo.GMT_MX(M1_mirror_modes=u"bending modes",M1_N_MODE=27)
-    src = ceo.Source(photometric_band="V",
-                    rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
-    src>>(gmt,)
-    zen = np.ones(3)*ceo.constants.ARCMIN2RAD*8
-    azi = np.arange(3)*2*np.pi/3
-    gs = ceo.Source(photometric_band="R+I",zenith=zen.tolist(),azimuth=azi.tolist(),
-                    rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
-    def wfs_error_rms_mas(magnitude):
-        r0 = 16e-2
-        r0_wavelength = 500e-9
-        _r0_ = r0*(gs.wavelength/r0_wavelength)**1.2
-        seeingArcsec = gs.wavelength/_r0_*ceo.constants.RAD2ARCSEC
-
-        wfs_camera_exposureTime = 30
-        wfs_camera_photoelectron_gain = 0.8*0.48
-        gs.magnitude = [magnitude]*3
-        nPhLenslet = wfs_camera_exposureTime*wfs_camera_photoelectron_gain*gs.nPhoton[0]*(25.5/48)**2
-        return 1e3*seeingArcsec/np.sqrt(2*np.log(2)*nPhLenslet)
-    az_idx = np.argsort(az_dist)
-    median_wfe_rms = []
-    for kTest in range(nTest):
-        id1 = az_idx[kTest]
-        qc = q-q[id1]
-        id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
-        ids = [id1]+id2
-        stars_r[mask][ids],stars_o[mask][ids],R[mask][ids]
-
-        nSample = 100
-        wfs = ceo.GeometricShackHartmann(nLenslet,L/nLenslet,3)
-        zen = stars_r[mask][ids]#np.ones(3)*ceo.constants.ARCMIN2RAD*gs_radius
-        azi = stars_o[mask][ids]#np.arange(3)*2*np.pi/3
-        gs = ceo.Source(photometric_band="R+I",zenith=zen.tolist(),azimuth=azi.tolist(),
-                        magnitude=R[mask][ids],
-                        rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
-
-        gs.reset()
-        gmt.reset()
-        gmt.propagate(gs)
-        wfs.calibrate(gs,0.)
-        gs>>(gmt,wfs)
-
-        C = gmt.AGWS_calibrate(wfs,gs,decoupled=True,fluxThreshold=0.5,includeBM=False,
-                               filterMirrorRotation=True,
-                              calibrationVaultKwargs={'nThreshold':[2]*6+[0],
-                                                      'insertZeros':[None]*6 + [[2,7]]})
-
-        nSample = 10
-        wfe_rms = np.zeros(nSample)
-        for k in range(nSample):
-            n = np.random.randn(nLenslet**2*2,3)#
-            for l in range(3):
-                n[:,l] *= wfs_error_rms_mas(gs.magnitude[l])*ceo.constants.MAS2RAD
-
-            ~gmt
-            state = gmt.state
-            ~wfs
-            +gs
-            -wfs
-            c = C.dot(wfs.Data + n.reshape(-1,1)).reshape(7,-1)
-
-            state['M1']['Rxyz'] -= c[:,:3]
-            state['M1']['Txyz'] -= c[:,3:6]
-            state['M2']['Rxyz'] -= c[:,6:9]
-            state['M2']['Txyz'] -= c[:,9:12]
-
-            gmt^=state
-
-            +src
-            wfe_rms[k] = src.wavefront.rms(-9)
-
-        median_wfe_rms += [np.median(wfe_rms)]
-    w = np.argsort(median_wfe_rms)[0]
-    id1 = az_idx[w]
-    qc = q-q[id1]
-    id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
-    ids = [id1]+id2
-    print(stars_r[mask][ids],stars_o[mask][ids],R[mask][ids])
-    for uid in np.where(mask0)[0][mask][ids]:
-        probe_id = np.argmin([stars.distanceFrom(Quantity(probe.local,'rad'),
-                                                 star_idx=[uid],u='arcmin') for probe in probes])
-        probes[probe_id].gs_idx = uid
-@
-\section{The probes}
+\subsection{The probes}
 \label{sec:probes}
 
 The AGWS is made of 4 identical probes.
-The probe envelope dictates t
-<<probe.yaml>>=
-Probe:
-  geometry:
-    x: [0,0]
-    y: [0,0]
-    buffer width: [1.5,'cm']
-  guider:
-    fov: [30,'arcsec']
-  tt7:
-    fov: [5,'arcsec']
+The probes are at $[[rad]]=1360/60$ arcmin away from the center of the field and
+90 degree apart from each other ([[az]]).
+The range radius of the probe is set with the property [[range_rad]].
+The [[local]] property contains the Cartesian coordinates of the probe with
+respect to the center of the field. 
+% <probe.yaml>>=
+% Probe:
+%   geometry:
+%     x: [0,0]
+%     y: [0,0]
+%     buffer width: [1.5,'cm']
+%   guider:
+%     fov: [30,'arcsec']
+%   tt7:
+%     fov: [5,'arcsec']
 @
 <<probe>>=
 class Probe:
@@ -495,12 +305,444 @@ class Probe:
         self.rad = Quantity(1360/60,'arcmin')
         self.az  = az
         self.range_rad = self.rad - exclude_rad
-        self.local = np.array([[self.rad.to('rad').value*np.cos(self.az).value],
-                               [self.rad.to('rad').value*np.sin(self.az).value]])
+        self.local = np.array([[self.rad.to('rad').value*\
+                                np.cos(self.az).value],
+                               [self.rad.to('rad').value*\
+                                np.sin(self.az).value]])
         self.gs_idx = None
-    def reachForTheStars(self,stars):
-        dist_to_probe = stars.distanceFrom(Quantity(self.local,'rad'))
-        self.stars_idx = dist_to_probe<=self.range_rad.to('rad').value
+
+    <<probe method>>
+@
+The method [[reachForTheStars]] identifies the stars that are within the
+patrolling range of the probe:
+<<probe method>>=
+def reachForTheStars(self,stars):
+    dist_to_probe = stars.distanceFrom(Quantity(self.local,'rad'))
+    self.stars_idx = dist_to_probe<=self.range_rad.to('rad').value
+@
+\subsection{ATP parameters}
+\label{sec:parameters}
+
+<<atp.yaml>>=
+<<ATP parameters>>
+@
+The parameters file is read with:
+<<module imports>>=
+import yaml
+@
+<<reading the atp config file>>=
+with open(CFG_FILE) as fp:
+    cfg = yaml.load(fp)
+@ %def cfg
+
+\subsection{ATP python module}
+\label{sec:atp-module}
+
+<<module imports>>=
+import numpy as np
+from astroquery.mast import Catalogs
+import astropy.units as units
+from astropy.units import Quantity
+from astropy.time import Time
+from astropy.coordinates import SkyCoord, EarthLocation, ICRS, AltAz
+@
+The atp python module is
+<<atp.py>>=
+<<module imports>>
+import ceo  
+from datetime import datetime
+RAD2MAS = 180*3600e3/np.pi
+RAD2ARCSEC = 180*3600/np.pi
+ARCMIN2RAD = np.pi/180/60
+<<rotation matrices>>
+<<photon noise>>
+<<read-out noise>>
+<<r0 scaling function>>
+<<tt7 tip-tilt error>>
+<<SH GSs>>
+<<observatory>>
+<<target>>
+<<star field>>
+<<probe>>
+
+if __name__ == "__main__":
+    CFG_FILE = 'atp.yaml'
+    <<atp main>>
+@ %def atp.py
+with
+<<atp main>>=
+<<reading the atp config file>>
+obs = Observatory(**cfg['Observatory'],**cfg['Observation'])
+target = Target(obs,**cfg['Target'])
+stars  = StarField(obs,target)
+tt_res_rms = [tt7_res_rms(zz,magnitude) \
+              for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
+tt7_gs_idx = np.argmin(tt_res_rms)
+probes  = []
+tt7_dist = []
+for k in range(4):
+    probes += [Probe(Quantity(k*90,'degree'))]
+    probes[k].reachForTheStars(stars)
+    tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),
+                                    star_idx=[tt7_gs_idx],u='arcmin')]
+tt7_idx = np.argmin(tt7_dist)
+TT7 = probes[tt7_idx]
+TT7.gs_idx = tt7_gs_idx
+probes.pop(tt7_idx)
+#SH_GSs()
+@
+
+\section{Guide star selection}
+\label{sec:gs-selection}
+
+\subsection{TT7 guide star}
+\label{sec:tt7}
+
+The GS for the TT7 sensor is defined as the GS that minimizes the root sum
+square of the tip--tilt anisoplanatism and the detector noise.
+<<tt7 tip-tilt error>>=
+def tt7_tt_error(zz,magnitude,zenith_distance,**kwargs):
+    <<Fried parameter scaling>>
+    D = Quantity(*kwargs['Telescope']['diameter']).to('m').value
+    L0 = Quantity(*kwargs['Atmosphere']['L0']).to('m').value
+    altitude = np.array(Quantity(*kwargs['Atmosphere']['altitude']).to('m').value)
+    fr0 = np.array(kwargs['Atmosphere']['fr0'])
+    anisop = tilt_anisoplanatism(ARCMIN2RAD*zz,r0,gs_wavelength,L0,D,altitude,fr0)
+
+    seeingArcsec = gs_wavelength/r0
+    <<number of photon per lenslet per frame>>
+    pn = photon_noise_variance(seeingArcsec,nPhLenslet)
+    return np.sqrt(anisop+2*pn)*RAD2MAS
+@ %def tt7_tt_error
+\subsubsection{Tip--tilt anisoplanatism}
+\label{sec:tt-anisop}
+
+The sum of  tip--tilt anisoplanatism variance along the x and y axis is given by:
+\begin{eqnarray}
+  \label{eq:1}
+  \lefteqn{\sigma_\theta^2 = 4\lambda^2r_0^{-5/3}{\pi\Gamma^2(11/6)\over
+  2\pi^{11/3}}\left( 24 \Gamma(6/5) \over 5 \right)^{5/6}\times} \\\nonumber
+  &&\sum_{l=1}^{N_l} \xi_{0,l} \int_0^\infty \mathrm{d}f f^3\left(f^2 + {1\over\mathcal L_0^2}\right)^{-11/6}G(f,D)\left( 1 - J_0(2\pi\zeta h_l f) \right)
+\end{eqnarray}
+<<tip-tilt anisoplanatism>>=
+def integrandSF(f,theta,r0,wl,L0,D,altitude,fr0):
+    f0 = 1.0/L0
+    cst = np.pi*gamma(11./6.)**2/(2*np.pi**(11./3.))*(24*gamma(6./5.)/5)**(5./6.)
+    cst *= wl**2*r0**(-5.0/3.0)
+    sum = 0.0
+    for k in range(altitude.size):
+        rho = theta*altitude[k]
+        red = 2*np.pi*rho*f
+        sum += fr0[k]*f**3*(f**2+f0**2)**(-11.0/6.0)*G(f,D)*( 1 - j0(red) )
+    return 4*cst*sum
+@ %def integrandSF
+with
+\begin{equation}
+  \label{eq:2}
+  G(f,D) = \left( 2J_1(\pi Df )\over \pi Df\right)^2.
+\end{equation}
+<<telescope filter function>>=
+def G(_f_,D):
+    f = np.array(_f_)
+    out = np.ones_like(f)
+    idx = f!=0
+    red = np.pi*D*f[idx]
+    out[idx] = (2*j1(red)/red)**2
+    return out
+@ %def G
+$\lambda$ is the wavelength, $r_0$ is the Fried parameter, $\mathcal L_0$ is the
+outer scale, $D$ is the telescope diameter, $\zeta$ is the zenith distance, $N_l$ is the number of atmospheric
+layers, $\xi_{0,l}$ is the fractional $r_0$ and $h_l$ is the atmospheric layer
+altitude.
+<<ATP parameters>>=
+Telescope:
+  diameter: [25.5,'m']
+  area: 367 # m^2
+Atmosphere:
+  wavelength: [500,'nm']
+  r0: [16,'cm']
+  L0: [25,'m']
+  altitude: [[25, 275, 425, 1250, 4000, 8000, 13000],'m']
+  fr0: [0.1257, 0.0874, 0.0666, 0.3498, 0.2273, 0.0681, 0.0751]
+@
+The Fried parameter is scaled according to the GS wavelength
+\begin{equation}
+  \label{eq:5}
+  r_0(\lambda_{GS}) = r_0(\lambda_{atm})\left( \lambda_{gs}\over\lambda_{atm} \right)^{6/5}
+\end{equation}
+and to the zenith distance
+\begin{equation}
+  \label{eq:6}
+  r_0^{-5/3}(z) = r_0^{-5/3}(0)\cos^{-1}(z) 
+\end{equation}
+<<Fried parameter scaling>>=
+gs_wavelength = Quantity(*kwargs['TT7']['guide star']['wavelength']).to('m').value
+r0_wavelength = Quantity(*kwargs['Atmosphere']['wavelength']).to('m').value
+r0 = Quantity(*kwargs['Atmosphere']['r0']).to('m').value#*\
+     #(gs_wavelength/r0_wavelength)**1.2
+@
+<<Fried parameter scaling>>=
+#r0 = (r0**(-5./3.)/np.cos(zenith_distance))**(-3./5.)
+r0 *= r0_scaling(r0_wavelength,gs_wavelength,zenith_distance)
+@
+<<r0 scaling function>>=
+def r0_scaling(atm_wavelength,gs_wavelength,zenith_distance=0):
+    return (gs_wavelength/atm_wavelength)**1.2*np.cos(zenith_distance)**0.6
+@ %def r0_scaling
+<<tt7 tip-tilt error>>=
+from scipy.special import j0, j1, jn, gamma
+from scipy.integrate import quad
+def tilt_anisoplanatism(zz,r0,wl,L0,D,altitude,fr0):
+    <<telescope filter function>>
+    <<tip-tilt anisoplanatism>>
+    cexy_var,err = quad(integrandSF,0,np.inf,#limit=200,
+                 args=(zz,r0,wl,L0,D,altitude,fr0))
+    return cexy_var
+@ %def tilt_anisoplanatism
+
+\subsubsection{TT7 noise}
+\label{sec:tt7-noise}
+
+The TT7 noise is the sum of the photon noise, read-out noise and background
+noise that depends of the TT7 guide star, optics, detector and control parameters.
+<<ATP parameters>>=
+TT7:
+  guide star:
+    wavelength: [715,'nm']
+    zero point: !!float 24.46e9 # ph/m^2/s
+  optics:
+    lenslet:
+      array: 7
+      spot size: seeing limited
+      pixel scale: null
+      pixels: null
+    throughput: 0.48
+  detector:
+    exposure: [5,'ms']
+    quantum efficiency: 0.8
+    read-out noise: 0
+  control:
+    gain: 0
+    latency: 0
+@
+The detector noise variance is the sum of
+\begin{itemize}
+\item the photon noise
+\begin{equation}
+  \label{eq:3}
+  \sigma_{ph}^2 = {\varepsilon^2 \over 2\ln(2)N_{ph}}
+\end{equation}
+where $\varepsilon$ is the spot FWHM and $N_{ph}$ is the number of photon per
+lenset per exposure.
+<<photon noise>>=
+def photon_noise_variance(fwhm,Nph):
+    return 0.5*fwhm**2/Nph/np.log(2)
+@ %def photon_noise_variance
+The number of photon per lenslet per frame is given by
+\begin{equation}
+  \label{eq:7}
+  N_{ph} = T\omega q {A\over 7} F_0 10^{-0.4 m}
+\end{equation}
+with $T$ the WFS exposure time, $\omega$ the optics throughput, $q$ the detector
+quantum efficiency, $A$ the telescope M$_1$ area, $F_0$ the GS zero point and
+$m$ the guide star magnitude.
+<<number of photon per lenslet per frame>>=
+wfs_photoelectron_gain = kwargs['TT7']['optics']['throughput']*\
+                         kwargs['TT7']['detector']['quantum efficiency']
+gs_nPhoton = kwargs['TT7']['guide star']['zero point']*10**(-0.4*magnitude)
+nPhLenslet = Quantity(*kwargs['TT7']['detector']['exposure']).to('s').value*\
+             wfs_photoelectron_gain*gs_nPhoton*kwargs['Telescope']['area']/\
+             kwargs['TT7']['optics']['lenslet']['array']
+@
+\item the read-out and background noise
+  \begin{equation}
+    \label{eq:4}
+    \sigma_{ron}^2 = {p^2 (\sigma_n^2+N_{bg}) \over N_{ph}^2 }{N_s^4\over 12}
+  \end{equation}
+\end{itemize}
+where $p$ is the pixel scale, $\sigma_n$ is the detector read--out noise,
+$N_{bg}$ is the number of background photons and
+$N_s^2$ is the number of pixel read per lenslet.
+<<read-out noise>>=
+def readout_noise_variance(ron2,p,Ns2,Nbg=0):
+    sig2 = ron2 + Nbg
+    return sig2*(p*Ns2/Nph)**2/12
+@ %def readout_noise_variance
+
+\subsection{Shack--Hartmann guide stars}
+\label{sec:sh-gs}
+
+The SH--WFS parameters are listed below:
+<<ATP parameters>>=
+SH:
+  guide star:
+    wavelength: [715,'nm']
+    zero point: !!float 24.46e9 # ph/m^2/s
+  optics:
+    lenslet:
+      array: 48
+      spot size: seeing limited
+      pixel scale: null
+      pixels: null
+    throughput: 0.48
+  detector:
+    exposure: [30,'s']
+    quantum efficiency: 0.8
+    read-out noise: 0
+  control:
+    gain: 0
+    latency: 0
+@
+The selection of the guide stars is based on the following procedure:
+\begin{enumerate}
+\item the stars are reduced to the ones only accessible to the SH probes
+<<SH guide stars identification>>=
+mask0 = probes[0].stars_idx
+mask0 = np.logical_or(mask0,probes[1].stars_idx)
+mask0 = np.logical_or(mask0,probes[2].stars_idx)
+stars_xy = stars.local[:2,mask0]
+R = stars.V[mask0]
+@
+\item the stars within the radii [[min_radius]] arcmin and 10 arcmin are
+  selected
+<<select annular region>>=
+stars_r = np.sqrt(np.sum(stars_xy**2,0))
+stars_o = np.arctan2(stars_xy[1,:],stars_xy[0,:])
+q = Quantity(stars_r,'rad').to('arcmin')
+mask = np.logical_and(q>Quantity(min_radius,'arcmin'),q<=Quantity(10,'arcmin'))
+@
+\item for each star in the down--selected field, one seeks 2 other stars such as
+  their angles with respect to the given star is close to 120 degree and -120
+  degree, respectively.
+If the 2 stars are perfectly symmetric with respect to the given star, then the
+sum of both relative angles
+[[az_dist]] is zero.
+<<relative azimuth symmetry>>=
+lo = 2*np.pi/3
+Rmin = []
+az_dist = []
+q = stars_o[mask]
+for c,_q_ in enumerate(q):
+    qc = q - _q_
+    id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
+    az_dist += [np.abs(qc[id2].sum())]
+    Rmin += [np.min(R[mask][[c]+id2])]
+az_idx = np.argsort(az_dist)
+@
+\item for the [[nTest]] most symmetric GS triplets, the statistics of
+  detector noise propagation in the active optics system is evaluated for [[nSample]]
+  samples.
+  The final GS triplet is the one with the smallest median wavefront error rms.
+<<noise propagation>>=
+<<GMT and on-axis source definition>>
+
+gs_wavelength = Quantity(*kwargs['SH']['guide star']['wavelength']).to('m').value
+r0_wavelength = Quantity(*kwargs['Atmosphere']['wavelength']).to('m').value
+r0 = Quantity(*kwargs['Atmosphere']['r0']).to('m').value
+r0 *= r0_scaling(r0_wavelength,gs_wavelength,zenith_distance)
+seeingArcsec = gs_wavelength/r0
+
+wfs_photoelectron_gain = kwargs['SH']['optics']['throughput']*\
+                 kwargs['SH']['detector']['quantum efficiency']
+gs_nPhoton = kwargs['SH']['guide star']['zero point']
+nPhLenslet = Quantity(*kwargs['SH']['detector']['exposure']).to('s').value*\
+             wfs_photoelectron_gain*gs_nPhoton*\
+             (Quantity(*kwargs['Telescope']['diameter']).to('m').value/\
+              kwargs['TT7']['optics']['lenslet']['array'])**2
+
+median_wfe_rms = []
+for kTest in range(nTest):
+    id1 = az_idx[kTest]
+    qc = q-q[id1]
+    id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
+    ids = [id1]+id2
+
+    <<WFS and GS definition>>
+    <<interaction matrix>>
+
+    wfe_rms = np.zeros(nSample)
+    for k in range(nSample):
+        n = np.random.randn(nLenslet**2*2,3)#
+        for l in range(3):
+            nPhLenslet *= 10**(-0.4*gs.magnitude[l])
+            n[:,l] *= np.sqrt(photon_noise_variance(seeingArcsec,nPhLenslet))
+
+        ~gmt
+        state = gmt.state
+        ~wfs
+        +gs
+        -wfs
+        c = C.dot(wfs.Data + n.reshape(-1,1)).reshape(7,-1)
+
+        state['M1']['Rxyz'] -= c[:,:3]
+        state['M1']['Txyz'] -= c[:,3:6]
+        state['M2']['Rxyz'] -= c[:,6:9]
+        state['M2']['Txyz'] -= c[:,9:12]
+
+        gmt^=state
+
+        +src
+        wfe_rms[k] = src.wavefront.rms(-9)
+
+    median_wfe_rms += [np.median(wfe_rms)]
+@
+<<GMT and on-axis source definition>>=
+L=25.5
+nPx = 101
+nLenslet = 48
+gmt = ceo.GMT_MX()
+src = ceo.Source(photometric_band="V",
+                rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
+src>>(gmt,)
+zen = np.ones(3)*ceo.constants.ARCMIN2RAD*8
+azi = np.arange(3)*2*np.pi/3
+gs = ceo.Source(photometric_band="R+I",zenith=zen.tolist(),azimuth=azi.tolist(),
+                rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
+@
+<<WFS and GS definition>>=
+wfs = ceo.GeometricShackHartmann(nLenslet,L/nLenslet,3)
+zen = stars_r[mask][ids]
+azi = stars_o[mask][ids]
+gs = ceo.Source(photometric_band="R+I",zenith=zen.tolist(),azimuth=azi.tolist(),
+                magnitude=R[mask][ids],
+                rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
+gs.reset()
+gmt.reset()
+gmt.propagate(gs)
+wfs.calibrate(gs,0.)
+gs>>(gmt,wfs)
+@
+<<interaction matrix>>=
+C = gmt.AGWS_calibrate(wfs,gs,decoupled=True,fluxThreshold=0.5,includeBM=False,
+                       filterMirrorRotation=True,
+                       calibrationVaultKwargs={'nThreshold':[2]*6+[0],
+                                               'insertZeros':[None]*6 + [[2,7]]})
+@
+\item each GS is paired with the closest probe
+<<probe/GS pairing>>=
+w = np.argsort(median_wfe_rms)[0]
+id1 = az_idx[w]
+qc = q-q[id1]
+id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
+ids = [id1]+id2
+print(stars_r[mask][ids],stars_o[mask][ids],R[mask][ids])
+for uid in np.where(mask0)[0][mask][ids]:
+    probe_id = np.argmin([stars.distanceFrom(Quantity(probe.local,'rad'),
+                                             star_idx=[uid],u='arcmin') \
+                          for probe in probes])
+    probes[probe_id].gs_idx = uid
+@
+\end{enumerate}
+
+<<SH GSs>>=
+def SH_GSs(probes,stars,zenith_distance,min_radius=6,
+           nTest=10,nSample=10,**kwargs):
+    print('SH GSs...')
+    <<SH guide stars identification>>
+    <<select annular region>>
+    <<relative azimuth symmetry>>
+    <<noise propagation>>
+    <<probe/GS pairing>>
 @
 \section{Display}
 \label{sec:display}
@@ -517,7 +759,7 @@ from bokeh.models.widgets import Button, Slider, Select, Panel, \
 import numpy as np
 import yaml
 from astropy.units import Quantity
-from atp import Observatory, Target, StarField, Probe, tt7_res_rms, SH_GSs
+from atp import Observatory, Target, StarField, Probe, tt7_tt_error, SH_GSs
 
 CFG_FILE = __file__.replace('main.py','atp.yaml')
 <<reading the atp config file>>
@@ -640,13 +882,14 @@ tel_az = TextInput(value="0", title="Telescope azimuth [degree]")
 <<widgets>>=
 query = Button(label="Query field", button_type="default")
 def cb_query():
-    agws['obs'] = Observatory(cfg['Observatory'],
-                              {'time':datetime.value,
-                               'time resolution':[float(time_res.value),'second']})
-    agws['target'] = Target(agws['obs'],{'pointing target':target_name.value,
-                                 'pointing ra/dec':None,
-                                 'pointing alt/az':{'alt':[float(tel_alt.value),'degree'],
-                                                    'az':[float(tel_az.value),'degree']}})
+    agws['obs'] = Observatory(**{'time':datetime.value,
+                               'time resolution':[float(time_res.value),'second']},
+                               **cfg['Observatory'])
+    agws['target'] = Target(agws['obs'],**{'pointing target':target_name.value,
+                                           'pointing ra/dec':None,
+                                           'pointing alt/az':{'alt':[float(tel_alt.value),'degree'],
+                                                              'az':[float(tel_az.value),'degree']},
+                                           'rotator angle':[0,'degree']})
     agws['probes'] = [Probe(Quantity(k*90,'degree')) for k in range(4)]
     #probes_sources['mirror'] = []
     #probes_sources['stage'] = []
@@ -655,7 +898,9 @@ def cb_query():
     #    probes_sources['stage']  += [ColumnDataSource(data=dict(px=[],py=[]))]
     tel_alt.value = "%.2f"%agws['target'].altaz.alt.value
     tel_az.value = "%.2f"%agws['target'].altaz.az.value
-    agws['stars']  = StarField(agws['obs'],agws['target'])
+    agws['stars']  = StarField(agws['obs'],agws['target'],
+                               **{'V magnitude limit':18,
+                                  'exclude radius':[3,'arcmin']})
     stars = agws['stars']
     for k in range(4):
         agws['probes'][k].reachForTheStars(stars)
@@ -680,9 +925,13 @@ query.on_click(cb_query)
 <<widgets>>=
 find_tt7 = Button(label="Find GSs", button_type="default")
 def cb_find_tt7():
-    stars = agws['stars']
+    stars  = agws['stars']
     probes = agws['probes']
-    tt_res_rms = [tt7_res_rms(zz,magnitude) for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
+    target = agws['target']
+    zen = np.pi/2-target.altaz.alt.to('rad').value
+    tt_res_rms = [tt7_tt_error(zz,magnitude,zen,**cfg) \
+                  for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
+    print(tt_res_rms)
     tt7_gs_idx = np.argmin(tt_res_rms)
     tt7_dist = []
     for k in range(4):
@@ -699,7 +948,7 @@ def cb_find_tt7():
     p.circle(r2a*stars.local[0,TT7.gs_idx],r2a*stars.local[1,TT7.gs_idx],
              size=10,fill_color=None,line_color='FireBrick',line_width=3)
     """
-    SH_GSs(probes,stars)
+    SH_GSs(probes,stars,zen,**cfg)
 
     probes = [TT7]+probes
     for probe,mirror,stage,c in zip(probes,
@@ -720,7 +969,6 @@ def cb_find_tt7():
         src = ColumnDataSource(data=dict(px=[r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
                                          py=[r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]]))
         stage.data.update(src.data)
-
 find_tt7.on_click(cb_find_tt7)
 @
 \item the GIR
