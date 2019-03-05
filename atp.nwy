@@ -31,10 +31,11 @@ Some components are also implemented as a python class.
 \label{sec:observation}
 
 An observation is defined by a date and time (UTC) at which the observation is
-supposed to start, the duration of the observation and the sampling time of the observation.
+supposed to start, the time scale, the duration of the observation and the sampling time of the observation.
 
 <<ATP parameters>>=
 Observation:
+  time scale: 'UTC'
   time: '2018-01-01T04:00:00'
   time resolution: [60,'second']
   duration: [null,'second']
@@ -42,7 +43,7 @@ Observation:
 \subsection{Observatory}
 \label{sec:gmt}
 
-The geodetic coordinates of the telescope are set in the parameter file:
+The geodetic45 coordinates of the telescope are set in the parameter file:
 <<ATP parameters>>=
 Observatory:
   latitude: [-29.049,'degree']
@@ -57,6 +58,7 @@ class Observatory:
         self.location = EarthLocation(lat=Quantity(*kwargs['latitude']),
                                       lon=Quantity(*kwargs['longitude']),
                                       height=Quantity(*kwargs['height']))
+        self.time_scale = kwargs['time scale']
         self.start_time = Time(kwargs['time'])
         self.current_time  = Time(kwargs['time'])
         if self.current_time is None:
@@ -86,7 +88,10 @@ The sidereal time is obtained from the [[sidereal_time]] property:
 <<observatory method>>=
 @property
 def sidereal_time(self):
-    return self.current_time.sidereal_time('apparent',self.location.lon)
+    if self.time_scale=='LST':
+        return Angle(self.current_time.value.split('T')[-1],unit='hourangle')
+    else:
+        return self.current_time.sidereal_time('apparent',self.location.lon)
 @
 \subsection{Target}
 \label{sec:target}
@@ -111,17 +116,25 @@ class Target:
     def __init__(self,obs,**kwargs):
         self.obs = obs
         if kwargs['pointing target'] not in [None,'None']:
-            self.icrs  = SkyCoord.from_name(kwargs['pointing target'],
-                                            frame='icrs')
-        if kwargs['pointing ra/dec'] is not None:
-            self.icrs  = SkyCoord(ra=Quantity(*kwargs['pointing ra/dec']['ra']),
-                                  dec=Quantity(*kwargs['pointing ra/dec']['dec']),
-                                  frame='icrs')
-        if kwargs['pointing alt/az'] is not None:
+            name = kwargs['pointing target']
+            try:
+                self.icrs  = SkyCoord.from_name(name,frame='icrs')
+            except:
+                s = name.split(',')
+                print(s)
+                if len(s)>1:
+                    kwargs['pointing ra/dec'] = {'ra':  [float(s[0][1:])  , 'degree'],
+                                                 'dec': [float(s[1][:-1]) , 'degree']}
+                    kwargs['pointing alt/az'] = None
+        elif kwargs['pointing alt/az'] is not None:
             self.altaz = SkyCoord(alt=Quantity(*kwargs['pointing alt/az']['alt']),
                                   az=Quantity(*kwargs['pointing alt/az']['az']),
                                   frame = obs.frame)
             self.icrs  = self.altaz.transform_to( ICRS() )
+        if kwargs['pointing ra/dec'] is not None:
+            self.icrs  = SkyCoord(ra=Quantity(*kwargs['pointing ra/dec']['ra']),
+                                  dec=Quantity(*kwargs['pointing ra/dec']['dec']),
+                                  frame='icrs')
         self.rotator_angle = Quantity(*kwargs['rotator angle'])
         self.update(rotator=False)
         print("@(Target)>")
@@ -344,7 +357,7 @@ from astroquery.mast import Catalogs
 import astropy.units as units
 from astropy.units import Quantity
 from astropy.time import Time
-from astropy.coordinates import SkyCoord, EarthLocation, ICRS, AltAz
+from astropy.coordinates import SkyCoord, EarthLocation, ICRS, AltAz, Angle
 @
 The atp python module is
 <<atp.py>>=
@@ -374,22 +387,24 @@ with
 <<reading the atp config file>>
 obs = Observatory(**cfg['Observatory'],**cfg['Observation'])
 target = Target(obs,**cfg['Target'])
-stars  = StarField(obs,target)
-tt_res_rms = [tt7_res_rms(zz,magnitude) \
+stars  = StarField(obs,target,**cfg['Star Catalog'])
+probes = [Probe(Quantity(k*90,'degree')) for k in range(4)]
+for k in range(4):
+    probes[k].reachForTheStars(stars)
+zen = np.pi/2-target.altaz.alt.to('rad').value
+tt_res_rms = [tt7_tt_error(zz,magnitude,zen,**cfg) \
               for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
+print(tt_res_rms)
 tt7_gs_idx = np.argmin(tt_res_rms)
-probes  = []
 tt7_dist = []
 for k in range(4):
-    probes += [Probe(Quantity(k*90,'degree'))]
-    probes[k].reachForTheStars(stars)
-    tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),
-                                    star_idx=[tt7_gs_idx],u='arcmin')]
+    tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
 tt7_idx = np.argmin(tt7_dist)
 TT7 = probes[tt7_idx]
 TT7.gs_idx = tt7_gs_idx
 probes.pop(tt7_idx)
-#SH_GSs()
+SH_GSs(probes,stars,zen,**cfg)
+
 @
 
 \section{Guide star selection}
@@ -747,6 +762,27 @@ def SH_GSs(probes,stars,zenith_distance,min_radius=6,
 \section{Display}
 \label{sec:display}
 
+Lets build the model:
+<<model>>=
+class Model:
+    def __init__(self):
+        self.obs = None
+        self.target = None
+        self.stars = None
+        self.TT7 = None
+        self.probes = [Probe(Quantity(k*90,'degree')) for k in range(4)]
+@
+and the data sources for the graphics
+<<sources>>=
+class CDS:
+    def __init__(self):
+        self.stars = ColumnDataSource(data=dict(x=[],y=[],
+                                                Vmag=[],c=[],Jmag=[]))
+        self.probes = {'mirror':[],'stage':[]}
+        for k in range(4):
+            self.probes['mirror'] += [ColumnDataSource(data=dict(tx=[],ty=[],lc=[]))]
+            self.probes['stage']  += [ColumnDataSource(data=dict(px=[],py=[]))]
+@
 <<main.py>>=
 from bokeh.io import curdoc
 from bokeh.plotting import figure, show, output_file
@@ -761,17 +797,15 @@ import yaml
 from astropy.units import Quantity
 from atp import Observatory, Target, StarField, Probe, tt7_tt_error, SH_GSs
 
+<<model>>
+<<sources>>
+
 CFG_FILE = __file__.replace('main.py','atp.yaml')
 <<reading the atp config file>>
-agws = {'obs':None,'target':None,'stars':None,'TT7':None,
-        'probes':[Probe(Quantity(k*90,'degree')) for k in range(4)],
-        'source':ColumnDataSource(data=dict(x=[],y=[],
-                                            Vmag=[],c=[],Jmag=[]))}
+
 r2a = 180*60/np.pi
-probes_sources = {'mirror':[],'stage':[]}
-for k in range(4):
-    probes_sources['mirror'] += [ColumnDataSource(data=dict(tx=[],ty=[],lc=[]))]
-    probes_sources['stage']  += [ColumnDataSource(data=dict(px=[],py=[]))]
+mdl = Model()
+cds = CDS()
 
 doc = curdoc()
 
@@ -779,19 +813,18 @@ doc = curdoc()
 
 p = figure(title='AGWS',x_range=[-25,25],y_range=[-25,25],
            tools="pan,wheel_zoom,box_zoom,reset")
-probes = agws['probes']
 for k in range(4):
-    p.line(x='px',y='py',source=probes_sources['stage'][k],
-           line_width=5,color='navy')
-    p.circle(x='tx',y='ty',line_color='lc',source=probes_sources['mirror'][k],
-             size=10,fill_color=None,line_width=3)
-    p.wedge(r2a*probes[k].local[0,0],r2a*probes[k].local[1,0],radius=21,
+    p.line(x='px',y='py',source=cds.probes['stage'][k],
+           line_width=3,color='navy')
+    p.circle(x='tx',y='ty',line_color='lc',source=cds.probes['mirror'][k],
+             radius=0.5,fill_color=None,line_width=2)
+    p.wedge(r2a*mdl.probes[k].local[0,0],r2a*mdl.probes[k].local[1,0],radius=21,
             start_angle=(k*90+180-26.35)*np.pi/180,
             end_angle=(k*90+180+26.35)*np.pi/180,
             color='navy',alpha=0.05)
-    p.circle(r2a*probes[k].local[0,0],r2a*probes[k].local[1,0],
+    p.circle(r2a*mdl.probes[k].local[0,0],r2a*mdl.probes[k].local[1,0],
              size=15,color='navy')
-p.circle(x='x',y='y',color='c',size=5,source=agws['source'],
+p.circle(x='x',y='y',color='c',size=5,source=cds.stars,
          alpha=0.75,name='stars')
 p.circle(0,0,radius=3,fill_color=None,line_color='red',line_dash='dashed')
 p.circle(0,0,radius=10,fill_color=None,line_color='red',line_dash='dashed')
@@ -814,36 +847,33 @@ doc.add_root(row(widgetbox([datetime,
 <<widgets>>=
 startstop = Toggle(label="Start/Stop Time", button_type="default" ,active=False)
 def update():
-    obs = agws['obs']
-    target = agws['target']
-    stars = agws['stars']
-    source = agws['source']
-    probes = [agws['TT7']]+agws['probes']
-    obs.update()
-    target.update(rotator=rotator.active)
-    stars.update()
-    x = r2a*stars.local[0,:]
-    y = r2a*stars.local[1,:]
+    source = cds.stars
+    probes = [mdl.TT7] + mdl.probes
+    mdl.obs.update()
+    mdl.target.update(rotator=rotator.active)
+    mdl.stars.update()
+    x = r2a*mdl.stars.local[0,:]
+    y = r2a*mdl.stars.local[1,:]
     source.data.update(dict(x=x,y=y))
-    p.title.text = "AGWS - "+str(obs.current_time)+\
-                   ' - Alt: '+str(target.altaz.alt)+\
-                   ',Az: '+str(target.altaz.az)
-    for probe,mirror,stage in zip(probes,probes_sources['mirror'],probes_sources['stage']):
+    p.title.text = "AGWS - "+str(mdl.obs.current_time)+\
+                   ' - Alt: '+str(mdl.target.altaz.alt)+\
+                   ',Az: '+str(mdl.target.altaz.az)
+    for probe,mirror,stage in zip(probes,cds.probes['mirror'],cds.probes['stage']):
         """
-        p.line([r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
-               [r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]],
+        p.line([r2a*probe.local[0,0],r2a*mdl.stars.local[0,probe.gs_idx]],
+               [r2a*probe.local[1,0],r2a*mdl.stars.local[1,probe.gs_idx]],
                line_width=5,color='navy')
-        p.circle(r2a*stars.local[0,probe.gs_idx],r2a*stars.local[1,probe.gs_idx],
+        p.circle(r2a*mdl.stars.local[0,probe.gs_idx],r2a*mdl.stars.local[1,probe.gs_idx],
                  size=10,fill_color=None,line_color='DarkSeaGreen',line_width=3)
         """
-        src = ColumnDataSource(data=dict(tx=[r2a*stars.local[0,probe.gs_idx]],
-                                         ty=[r2a*stars.local[1,probe.gs_idx]],
+        src = ColumnDataSource(data=dict(tx=[r2a*mdl.stars.local[0,probe.gs_idx]],
+                                         ty=[r2a*mdl.stars.local[1,probe.gs_idx]],
                                          lc=['DarkSeaGreen']))
-        data = dict(tx=[r2a*stars.local[0,probe.gs_idx]],
-                    ty=[r2a*stars.local[1,probe.gs_idx]])
+        data = dict(tx=[r2a*mdl.stars.local[0,probe.gs_idx]],
+                    ty=[r2a*mdl.stars.local[1,probe.gs_idx]])
         mirror.data.update(data)
-        data = dict(px=[r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
-                    py=[r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]])
+        data = dict(px=[r2a*probe.local[0,0],r2a*mdl.stars.local[0,probe.gs_idx]],
+                    py=[r2a*probe.local[1,0],r2a*mdl.stars.local[1,probe.gs_idx]])
         stage.data.update(data)
 
         
@@ -871,7 +901,7 @@ time_res = TextInput(value="60", title="Time resolution [s]")
 @
 \item the target name
 <<widgets>>=
-target_name = TextInput(value="None", title="Target name")
+target_name = TextInput(value="None", title="Target name or coordinates (ra,dec)")
 @
 \item the telescope pointing direction (alt/az)
 <<widgets>>=
@@ -882,42 +912,37 @@ tel_az = TextInput(value="0", title="Telescope azimuth [degree]")
 <<widgets>>=
 query = Button(label="Query field", button_type="default")
 def cb_query():
-    agws['obs'] = Observatory(**{'time':datetime.value,
-                               'time resolution':[float(time_res.value),'second']},
-                               **cfg['Observatory'])
-    agws['target'] = Target(agws['obs'],**{'pointing target':target_name.value,
-                                           'pointing ra/dec':None,
-                                           'pointing alt/az':{'alt':[float(tel_alt.value),'degree'],
-                                                              'az':[float(tel_az.value),'degree']},
-                                           'rotator angle':[0,'degree']})
-    agws['probes'] = [Probe(Quantity(k*90,'degree')) for k in range(4)]
-    #probes_sources['mirror'] = []
-    #probes_sources['stage'] = []
-    #for k in range(4):
-    #    probes_sources['mirror'] += [ColumnDataSource(data=dict(tx=[],ty=[],lc=[]))]
-    #    probes_sources['stage']  += [ColumnDataSource(data=dict(px=[],py=[]))]
-    tel_alt.value = "%.2f"%agws['target'].altaz.alt.value
-    tel_az.value = "%.2f"%agws['target'].altaz.az.value
-    agws['stars']  = StarField(agws['obs'],agws['target'],
-                               **{'V magnitude limit':18,
-                                  'exclude radius':[3,'arcmin']})
-    stars = agws['stars']
-    for k in range(4):
-        agws['probes'][k].reachForTheStars(stars)
-    Vmag = stars.V#[idx]
-    Jmag = stars.J#[idx]
+    mdl.obs = Observatory(**{'time':datetime.value,
+                             'time resolution':[float(time_res.value),'second']},
+                          **cfg['Observatory'])
+    mdl.target = Target(mdl.obs,**{'pointing target':target_name.value,
+                                   'pointing ra/dec':None,
+                                   'pointing alt/az':{'alt':[float(tel_alt.value),'degree'],
+                                                      'az':[float(tel_az.value),'degree']},
+                                   'rotator angle':[0,'degree']})
+    if target_name.value is 'None':
+        target_name.value = '({0:.2f},{1:.2f})'.format(mdl.target.icrs.ra.value,
+                                               mdl.target.icrs.dec.value)
+    mdl.probes = [Probe(Quantity(k*90,'degree')) for k in range(4)]
+    tel_alt.value = "%.2f"%mdl.target.altaz.alt.value
+    tel_az.value = "%.2f"%mdl.target.altaz.az.value
+    mdl.stars  = StarField(mdl.obs,mdl.target,
+                           **{'V magnitude limit':18,
+                              'exclude radius':[3,'arcmin']})
+    Vmag = mdl.stars.V#[idx]
+    Jmag = mdl.stars.J#[idx]
     q = np.rint((Vmag - Vmag.min())/(Vmag.max()-Vmag.min())*10)
     c = [Plasma11[int(x)] for x in q]
-    src = ColumnDataSource(data=dict(x=r2a*stars.local[0,:],
-                                     y=r2a*stars.local[1,:],
+    src = ColumnDataSource(data=dict(x=r2a*mdl.stars.local[0,:],
+                                     y=r2a*mdl.stars.local[1,:],
                                      Vmag=Vmag,c=c,Jmag=Jmag))
-    agws['source'].data.update(src.data)
-    p.title.text = "AGWS - "+str(agws['obs'].current_time)+\
-                   ' - Alt: '+str(agws['target'].altaz.alt)+\
-                   ',Az: '+str(agws['target'].altaz.az)
-    V_lim.start = np.floor(stars.V.min())
-    V_lim.end   = np.ceil(stars.V.max())
-    V_lim.value = stars.Vmag_lim
+    cds.stars.data.update(src.data)
+    p.title.text = "AGWS - "+str(mdl.obs.current_time)+\
+                   ' - Alt: '+str(mdl.target.altaz.alt)+\
+                   ',Az: '+str(mdl.target.altaz.az)
+    V_lim.start = np.floor(mdl.stars.V.min())
+    V_lim.end   = np.ceil(mdl.stars.V.max())
+    V_lim.value = mdl.stars.Vmag_lim
 
 query.on_click(cb_query)
 @
@@ -925,49 +950,47 @@ query.on_click(cb_query)
 <<widgets>>=
 find_tt7 = Button(label="Find GSs", button_type="default")
 def cb_find_tt7():
-    stars  = agws['stars']
-    probes = agws['probes']
-    target = agws['target']
-    zen = np.pi/2-target.altaz.alt.to('rad').value
+    for k in range(4):
+        mdl.probes[k].reachForTheStars(mdl.stars)
+    zen = np.pi/2-mdl.target.altaz.alt.to('rad').value
     tt_res_rms = [tt7_tt_error(zz,magnitude,zen,**cfg) \
-                  for zz,magnitude in zip(stars.distanceFrom(u='arcmin').value,stars.V)]
+                  for zz,magnitude in zip(mdl.stars.distanceFrom(u='arcmin').value,mdl.stars.V)]
     print(tt_res_rms)
     tt7_gs_idx = np.argmin(tt_res_rms)
     tt7_dist = []
     for k in range(4):
-        tt7_dist += [stars.distanceFrom(Quantity(probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
+        tt7_dist += [mdl.stars.distanceFrom(Quantity(mdl.probes[k].local,'rad'),star_idx=[tt7_gs_idx],u='arcmin')]
     tt7_idx = np.argmin(tt7_dist)
-    agws['TT7'] = probes[tt7_idx]
-    TT7 = agws['TT7']
-    TT7.gs_idx = tt7_gs_idx
-    probes.pop(tt7_idx)
+    mdl.TT7 = mdl.probes[tt7_idx]
+    mdl.TT7.gs_idx = tt7_gs_idx
+    mdl.probes.pop(tt7_idx)
     """
-    p.line([r2a*TT7.local[0,0],r2a*stars.local[0,TT7.gs_idx]],
-           [r2a*TT7.local[1,0],r2a*stars.local[1,TT7.gs_idx]],
+    p.line([r2a*mdl.TT7.local[0,0],r2a*mdl.stars.local[0,mdl.TT7.gs_idx]],
+           [r2a*mdl.TT7.local[1,0],r2a*mdl.stars.local[1,mdl.TT7.gs_idx]],
            line_width=5,color='navy')
-    p.circle(r2a*stars.local[0,TT7.gs_idx],r2a*stars.local[1,TT7.gs_idx],
+    p.circle(r2a*mdl.stars.local[0,mdl.TT7.gs_idx],r2a*mdl.stars.local[1,mdl.TT7.gs_idx],
              size=10,fill_color=None,line_color='FireBrick',line_width=3)
     """
-    SH_GSs(probes,stars,zen,**cfg)
+    SH_GSs(mdl.probes,mdl.stars,zen,**cfg)
 
-    probes = [TT7]+probes
+    probes = [mdl.TT7]+mdl.probes
     for probe,mirror,stage,c in zip(probes,
-                                    probes_sources['mirror'],
-                                    probes_sources['stage'],
+                                    cds.probes['mirror'],
+                                    cds.probes['stage'],
                                     ['FireBrick']+['DarkSeaGreen']*3):
         """
-        p.line([r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
-               [r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]],
+        p.line([r2a*probe.local[0,0],r2a*mdl.stars.local[0,probe.gs_idx]],
+               [r2a*probe.local[1,0],r2a*mdl.stars.local[1,probe.gs_idx]],
                line_width=5,color='navy')
-        p.circle(r2a*stars.local[0,probe.gs_idx],r2a*stars.local[1,probe.gs_idx],
+        p.circle(r2a*mdl.stars.local[0,probe.gs_idx],r2a*mdl.stars.local[1,probe.gs_idx],
                  size=10,fill_color=None,line_color='DarkSeaGreen',line_width=3)
         """
-        src = ColumnDataSource(data=dict(tx=[r2a*stars.local[0,probe.gs_idx]],
-                                         ty=[r2a*stars.local[1,probe.gs_idx]],
+        src = ColumnDataSource(data=dict(tx=[r2a*mdl.stars.local[0,probe.gs_idx]],
+                                         ty=[r2a*mdl.stars.local[1,probe.gs_idx]],
                                          lc=[c]))
         mirror.data.update(src.data)
-        src = ColumnDataSource(data=dict(px=[r2a*probe.local[0,0],r2a*stars.local[0,probe.gs_idx]],
-                                         py=[r2a*probe.local[1,0],r2a*stars.local[1,probe.gs_idx]]))
+        src = ColumnDataSource(data=dict(px=[r2a*probe.local[0,0],r2a*mdl.stars.local[0,probe.gs_idx]],
+                                         py=[r2a*probe.local[1,0],r2a*mdl.stars.local[1,probe.gs_idx]]))
         stage.data.update(src.data)
 find_tt7.on_click(cb_find_tt7)
 @
@@ -975,23 +998,22 @@ find_tt7.on_click(cb_find_tt7)
 <<widgets>>=
 rotator = Toggle(label="Rotator On/Off", button_type="default" ,active=False)
 @
-\item R magnitude limit
+\item V magnitude limit
 <<widgets>>=
 V_lim = Slider(start=0,end=18,value=18,step=1,title='V magnitude limit')
 def  cb_V_lim(attrname, old, new):
-    stars = agws['stars']
-    stars.Vmag_lim = new
-    stars.apply_constrains()
-    for k in range(4):
-        agws['probes'][k].reachForTheStars(stars)
-    Vmag = stars.V#[idx]
-    Jmag = stars.J#[idx]
+    mdl.stars.Vmag_lim = new
+    mdl.stars.apply_constrains()
+    #for k in range(4):
+    #    mdl.probes[k].reachForTheStars(mdl.stars)
+    Vmag = mdl.stars.V#[idx]
+    Jmag = mdl.stars.J#[idx]
     q = np.rint((Vmag - Vmag.min())/(Vmag.max()-Vmag.min())*10)
     c = [Plasma11[int(x)] for x in q]
-    src = ColumnDataSource(data=dict(x=r2a*stars.local[0,:],
-                                     y=r2a*stars.local[1,:],
+    src = ColumnDataSource(data=dict(x=r2a*mdl.stars.local[0,:],
+                                     y=r2a*mdl.stars.local[1,:],
                                      Vmag=Vmag,c=c,Jmag=Jmag))
-    agws['source'].data.update(src.data)
+    cds.stars.data.update(src.data)
 V_lim.on_change('value',cb_V_lim)
 @
 \end{itemize}
