@@ -730,8 +730,8 @@ gs>>(gmt,wfs)
 <<interaction matrix>>=
 C = gmt.AGWS_calibrate(wfs,gs,decoupled=True,fluxThreshold=0.5,includeBM=False,
                        filterMirrorRotation=True,
-                       calibrationVaultKwargs={'nThreshold':[2]*6+[0],
-                                               'insertZeros':[None]*6 + [[2,7]]})
+                       calibrationVaultKwargs={'n_threshold':[2]*6+[0],
+                                               'insert_zeros':[None]*6 + [[5,10]]})
 @
 \item each GS is paired with the closest probe
 <<probe/GS pairing>>=
@@ -913,6 +913,7 @@ tel_az = TextInput(value="0", title="Telescope azimuth [degree]")
 query = Button(label="Query field", button_type="default")
 def cb_query():
     mdl.obs = Observatory(**{'time':datetime.value,
+                             'time scale':'UTC',
                              'time resolution':[float(time_res.value),'second']},
                           **cfg['Observatory'])
     mdl.target = Target(mdl.obs,**{'pointing target':target_name.value,
