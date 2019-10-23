@@ -169,6 +169,7 @@ excluded region specified by its radius and the V band magnitude limit.
 <<ATP parameters>>=
 Star Catalog:
   ra/dec error rms: null
+  radius: [10,'arcmin']
   exclude radius: [3,'arcmin']
   V magnitude limit: 18
 @
@@ -186,7 +187,7 @@ class StarField:
         self.Vmag_lim = kwargs['V magnitude limit']
         self.exclude_radius = Quantity(*kwargs['exclude radius'])
         if field is None:
-            radius = Quantity(10,units.arcminute)
+            radius = Quantity(*kwargs['radius'])
             print("@(StarField)> Querying TIC ...")
             self.catalogData = Catalogs.query_region(target.icrs, radius=radius,
                                                 catalog="TIC",objType="STAR")
