@@ -161,7 +161,7 @@ def update(self,rotator=True):
                               self.obs.time_resolution.to('s').value*\
                               Quantity(15,'degree')/3600
 @
-\subsection{AGWS Star Field}
+\subsection{Star Field}
 \label{sec:star-field}
 
 The parameters associated to the star field are the star position error rms, an
@@ -172,6 +172,7 @@ Star Catalog:
   radius: [10,'arcmin']
   exclude radius: [3,'arcmin']
   V magnitude limit: 18
+  color: [V,J]
 @
 The AGWS star field is read from the TESS Input Catalogue (TIC\footnote{\url{https://tess.mit.edu/data/tess-input-catalogue/}}).
 A 10 arcmin radius circular region is queried from the catalogue centered on
@@ -182,13 +183,20 @@ The data is further reduced to objects that have both a magnitude in V and J ban
 <<star field>>=
 class StarField:
     def __init__(self,obs,target,field=None,**kwargs):
+        self.logger = logging.getLogger((self.__class__.__name__))
+        self.logger.setLevel(logging.INFO)
         self.obs = obs
         self.target = target
         self.Vmag_lim = kwargs['V magnitude limit']
-        self.exclude_radius = Quantity(*kwargs['exclude radius'])
+        try:
+            self.exclude_radius = Quantity(*kwargs['exclude radius'])
+        except (TypeError,KeyError):
+            self.logger.warning('No exclude radius set!')
+            self.exclude_radius = None
+        self.color = kwargs['color']
         if field is None:
             radius = Quantity(*kwargs['radius'])
-            print("@(StarField)> Querying TIC ...")
+            self.logger.info("Querying TIC ...")
             self.catalogData = Catalogs.query_region(target.icrs, radius=radius,
                                                 catalog="TIC",objType="STAR")
             self.apply_constrains()
@@ -215,36 +223,42 @@ if self.exclude_radius is not None:
     vv = self.catalogData['dec']*units.deg - self.target.icrs.dec
     mask = np.hypot(uu,vv) > self.exclude_radius
     print('@(StarField)> Entries accessible #',mask.sum())
+else:
+    mask = np.ones(len(self.catalogData),dtype=np.bool)
+self.logger.info(f'Exclude radius: {mask.sum()}')
 @
 \item both V and J magnitude must be available:
-<<star field criteria>>= 
-Vmag = np.array(self.catalogData['Vmag'])
-Jmag = np.array(self.catalogData['Jmag'])
-_mask_ = np.logical_and(~np.isnan(Vmag),~np.isnan(Jmag))
+<<star field criteria>>=
+_mask_ = np.ones_like(mask,dtype=np.bool)
+for c in self.color:
+    c_mag = np.array(self.catalogData[f'{c}mag'])
+    _mask_ = np.logical_and(_mask_,~np.isnan(c_mag))
 mask = np.logical_and(mask,_mask_)
+self.logger.info(f'Color: {mask.sum()}')
 @
 \item the stars fainter that the given V band magnitude limit are rejected:
-<<star field criteria>>= 
+<<star field criteria>>=
+Vmag = self.catalogData['Vmag']
 Vmag[np.isnan(Vmag)] = self.Vmag_lim+1
 _mask_ = Vmag<=self.Vmag_lim
 mask = np.logical_and(mask,_mask_)
+self.logger.info(f'Magnitude: {mask.sum()}')
 @
 \end{enumerate}
 The selection criteria are enforced with the [[apply_constrains]] method: 
 <<star field methods>>=
 def apply_constrains(self):
-    print('@(StarField)> Catalog entry #',len(self.catalogData))
+    self.logger.info(f'@(StarField)> Catalog entry #{len(self.catalogData)}')
     <<star field criteria>>
-    self.V = Vmag[mask]
-    self.J = Jmag[mask]
     data = self.catalogData[mask]
+    for c in self.color:
+        setattr(self,c,data[f'{c}mag'])
     n = mask.sum()
-    print('@(StarField)> Entries with both V and J magnitude #',n)
+    self.logger.info(f'@(StarField)> Entries with {self.color} magnitude #{n}')
     if n>0:
-        print('@(StarField)> V magnitude range [{0},{1}]'.\
-              format(self.V.min(),self.V.max()))
-        print('@(StarField)> J magnitude range [{0},{1}]'.\
-              format(self.J.min(),self.J.max()))
+        for c in self.color:
+            self.logger.info('@(StarField)> V magnitude range [{0},{1}]'.\
+                  format(getattr(self,c).min(),getattr(self,c).max()))
         self.icrs = SkyCoord(ra=data['ra']*units.deg,
                              dec=data['dec']*units.deg,
                              frame='icrs')
@@ -359,6 +373,8 @@ import astropy.units as units
 from astropy.units import Quantity
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, EarthLocation, ICRS, AltAz, Angle
+import logging
+logging.basicConfig()
 @
 The atp python module is
 <<atp.py>>=
