@@ -199,7 +199,13 @@ class StarField:
             self.logger.info("Querying TIC ...")
             self.catalogData = Catalogs.query_region(target.icrs, radius=radius,
                                                 catalog="TIC",objType="STAR")
+            data = self.catalogData
+            self.icrs = SkyCoord(ra=data['ra']*units.deg,
+                             dec=data['dec']*units.deg,
+                             frame='icrs')
+            self.update()
             self.apply_constrains()
+            self.update()
         else:
             with open(field) as fp:
                 data = yaml.load(fp)
@@ -219,9 +225,10 @@ stars must fulfilled:
 \item the stars inside the excluded disc are filtered out:
 <<star field criteria>>=
 if self.exclude_radius is not None:
-    uu = self.catalogData['ra']*units.deg - self.target.icrs.ra
-    vv = self.catalogData['dec']*units.deg - self.target.icrs.dec
-    mask = np.hypot(uu,vv) > self.exclude_radius
+    #uu = self.catalogData['ra']*units.deg - self.target.icrs.ra
+    #vv = self.catalogData['dec']*units.deg - self.target.icrs.dec
+    #mask = np.hypot(uu,vv) > self.exclude_radius
+    mask = self.distanceFrom(u='arcmin') > self.exclude_radius
     print('@(StarField)> Entries accessible #',mask.sum())
 else:
     mask = np.ones(len(self.catalogData),dtype=np.bool)
