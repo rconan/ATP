@@ -64,7 +64,7 @@ class Observatory:
         if self.current_time is None:
             self.current_time = Time(datetime.now())
         self.time_resolution = Quantity(*kwargs['time resolution'])
-        print(str(self))
+        #print(str(self))
 
     def __str__(self):
         return "@(Observatory)> Location: "+str(self.location.geodetic)+\
@@ -137,9 +137,9 @@ class Target:
                                   frame='icrs')
         self.rotator_angle = Quantity(*kwargs['rotator angle'])
         self.update(rotator=False)
-        print("@(Target)>")
-        print(self.icrs)
-        print(self.altaz)
+        #print("@(Target)>")
+        #print(self.icrs)
+        #print(self.altaz)
 
     <<target method>>
 @ %def Target
@@ -229,7 +229,7 @@ if self.exclude_radius is not None:
     #vv = self.catalogData['dec']*units.deg - self.target.icrs.dec
     #mask = np.hypot(uu,vv) > self.exclude_radius
     mask = self.distanceFrom(u='arcmin') > self.exclude_radius
-    print('@(StarField)> Entries accessible #',mask.sum())
+    self.logger.info('Entries accessible #%d',mask.sum())
 else:
     mask = np.ones(len(self.catalogData),dtype=np.bool)
 self.logger.info(f'Exclude radius: {mask.sum()}')
@@ -255,16 +255,16 @@ self.logger.info(f'Magnitude: {mask.sum()}')
 The selection criteria are enforced with the [[apply_constrains]] method: 
 <<star field methods>>=
 def apply_constrains(self):
-    self.logger.info(f'@(StarField)> Catalog entry #{len(self.catalogData)}')
+    self.logger.info(f' Catalog entry #{len(self.catalogData)}')
     <<star field criteria>>
     data = self.catalogData[mask]
     for c in self.color:
         setattr(self,c,data[f'{c}mag'])
     n = mask.sum()
-    self.logger.info(f'@(StarField)> Entries with {self.color} magnitude #{n}')
+    self.logger.info(f'Entries with {self.color} magnitude #{n}')
     if n>0:
         for c in self.color:
-            self.logger.info('@(StarField)> V magnitude range [{0},{1}]'.\
+            self.logger.info('V magnitude range [{0},{1}]'.\
                   format(getattr(self,c).min(),getattr(self,c).max()))
         self.icrs = SkyCoord(ra=data['ra']*units.deg,
                              dec=data['dec']*units.deg,
@@ -684,7 +684,7 @@ seeingArcsec = gs_wavelength/r0
 wfs_photoelectron_gain = kwargs['SH']['optics']['throughput']*\
                  kwargs['SH']['detector']['quantum efficiency']
 gs_nPhoton = kwargs['SH']['guide star']['zero point']
-nPhLenslet = Quantity(*kwargs['SH']['detector']['exposure']).to('s').value*\
+nPhLenslet0 = Quantity(*kwargs['SH']['detector']['exposure']).to('s').value*\
              wfs_photoelectron_gain*gs_nPhoton*\
              (Quantity(*kwargs['Telescope']['diameter']).to('m').value/\
               kwargs['TT7']['optics']['lenslet']['array'])**2
@@ -703,20 +703,19 @@ for kTest in range(nTest):
     for k in range(nSample):
         n = np.random.randn(nLenslet**2*2,3)#
         for l in range(3):
-            nPhLenslet *= 10**(-0.4*gs.magnitude[l])
-            n[:,l] *= np.sqrt(photon_noise_variance(seeingArcsec,nPhLenslet))
+            nPhLenslet = nPhLenslet0*10**(-0.4*gs.magnitude[l])
+            rms_noise = np.sqrt(photon_noise_variance(seeingArcsec,nPhLenslet))
+            n[:,l] *= rms_noise
+            #print(f"V={gs.magnitude[l]},Nph={nPhLenslet},n={rms_noise*ceo.constants.RAD2MAS}")
 
         ~gmt
         state = gmt.state
-        ~wfs
-        +gs
-        -wfs
-        c = C.dot(wfs.Data + n.reshape(-1,1)).reshape(7,-1)
+        c = C.dot(n.reshape(-1,1)).reshape(7,-1)
 
-        state['M1']['Rxyz'] -= c[:,:3]
-        state['M1']['Txyz'] -= c[:,3:6]
-        state['M2']['Rxyz'] -= c[:,6:9]
-        state['M2']['Txyz'] -= c[:,9:12]
+        state['M1']['Txyz'] -= c[:,:3]
+        state['M1']['Rxyz'] -= c[:,3:6]
+        state['M2']['Txyz'] -= c[:,6:9]
+        state['M2']['Rxyz'] -= c[:,9:12]
 
         gmt^=state
 
@@ -724,19 +723,17 @@ for kTest in range(nTest):
         wfe_rms[k] = src.wavefront.rms(-9)
 
     median_wfe_rms += [np.median(wfe_rms)]
+print('MEDIAN WFE RMS [nm]:')
+print(median_wfe_rms)
 @
 <<GMT and on-axis source definition>>=
 L=25.5
-nPx = 101
+nPx = 201
 nLenslet = 48
 gmt = ceo.GMT_MX()
 src = ceo.Source(photometric_band="V",
                 rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
 src>>(gmt,)
-zen = np.ones(3)*ceo.constants.ARCMIN2RAD*8
-azi = np.arange(3)*2*np.pi/3
-gs = ceo.Source(photometric_band="R+I",zenith=zen.tolist(),azimuth=azi.tolist(),
-                rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
 @
 <<WFS and GS definition>>=
 wfs = ceo.GeometricShackHartmann(nLenslet,L/nLenslet,3)
@@ -744,7 +741,7 @@ zen = stars_r[mask][ids]
 azi = stars_o[mask][ids]
 gs = ceo.Source(photometric_band="R+I",zenith=zen.tolist(),azimuth=azi.tolist(),
                 magnitude=R[mask][ids],
-                rays_box_size=L,rays_box_sampling=nPx,rays_origin=[0,0,25])
+                rays_box_size=L,rays_box_sampling=nLenslet*8+1,rays_origin=[0,0,25])
 gs.reset()
 gmt.reset()
 gmt.propagate(gs)
@@ -764,7 +761,7 @@ id1 = az_idx[w]
 qc = q-q[id1]
 id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
 ids = [id1]+id2
-print(stars_r[mask][ids],stars_o[mask][ids],R[mask][ids])
+#print(stars_r[mask][ids],stars_o[mask][ids],R[mask][ids])
 for uid in np.where(mask0)[0][mask][ids]:
     probe_id = np.argmin([stars.distanceFrom(Quantity(probe.local,'rad'),
                                              star_idx=[uid],u='arcmin') \
