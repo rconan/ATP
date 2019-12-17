@@ -691,7 +691,7 @@ nPhLenslet0 = Quantity(*kwargs['SH']['detector']['exposure']).to('s').value*\
              wfs_photoelectron_gain*gs_nPhoton*\
              (Quantity(*kwargs['Telescope']['diameter']).to('m').value/\
               kwargs['TT7']['optics']['lenslet']['array'])**2
-px_scale = 0.4*ceo.constants.RAD2ARCSEC
+px_scale = 0.4*ceo.constants.ARCSEC2RAD
 ron2 = kwargs['SH']['detector']['read-out noise']**2
 
 median_wfe_rms = []
