@@ -451,6 +451,8 @@ def tt7_tt_error(zz,magnitude,zenith_distance,**kwargs):
     seeingArcsec = gs_wavelength/r0
     <<number of photon per lenslet per frame>>
     pn = photon_noise_variance(seeingArcsec,nPhLenslet)
+    ron2 = kwargs['TT7']['detector']['read-out noise']**2
+    rn = readout_noise_variance(nPhLenslet,ron2,0.4*ceo.constants.ARCSEC2RAD,144)
     return np.sqrt(anisop+2*pn)*RAD2MAS
 @ %def tt7_tt_error
 \subsubsection{Tip--tilt anisoplanatism}
@@ -603,7 +605,7 @@ where $p$ is the pixel scale, $\sigma_n$ is the detector read--out noise,
 $N_{bg}$ is the number of background photons and
 $N_s^2$ is the number of pixel read per lenslet.
 <<read-out noise>>=
-def readout_noise_variance(ron2,p,Ns2,Nbg=0):
+def readout_noise_variance(Nph,ron2,p,Ns2,Nbg=0):
     sig2 = ron2 + Nbg
     return sig2*(p*Ns2/Nph)**2/12
 @ %def readout_noise_variance
@@ -680,6 +682,7 @@ r0_wavelength = Quantity(*kwargs['Atmosphere']['wavelength']).to('m').value
 r0 = Quantity(*kwargs['Atmosphere']['r0']).to('m').value
 r0 *= r0_scaling(r0_wavelength,gs_wavelength,zenith_distance)
 seeingArcsec = gs_wavelength/r0
+print(f"seeing: {seeingArcsec*ceo.constants.RAD2ARCSEC}arcsec")
 
 wfs_photoelectron_gain = kwargs['SH']['optics']['throughput']*\
                  kwargs['SH']['detector']['quantum efficiency']
@@ -688,6 +691,8 @@ nPhLenslet0 = Quantity(*kwargs['SH']['detector']['exposure']).to('s').value*\
              wfs_photoelectron_gain*gs_nPhoton*\
              (Quantity(*kwargs['Telescope']['diameter']).to('m').value/\
               kwargs['TT7']['optics']['lenslet']['array'])**2
+px_scale = 0.4*ceo.constants.RAD2ARCSEC
+ron2 = kwargs['SH']['detector']['read-out noise']**2
 
 median_wfe_rms = []
 for kTest in range(nTest):
@@ -704,7 +709,10 @@ for kTest in range(nTest):
         n = np.random.randn(nLenslet**2*2,3)#
         for l in range(3):
             nPhLenslet = nPhLenslet0*10**(-0.4*gs.magnitude[l])
-            rms_noise = np.sqrt(photon_noise_variance(seeingArcsec,nPhLenslet))
+            rms_noise = np.sqrt(photon_noise_variance(seeingArcsec,nPhLenslet) + \
+                                readout_noise_variance(nPhLenslet,ron2,px_scale,64))
+
+
             n[:,l] *= rms_noise
             #print(f"V={gs.magnitude[l]},Nph={nPhLenslet},n={rms_noise*ceo.constants.RAD2MAS}")
 
@@ -761,11 +769,19 @@ id1 = az_idx[w]
 qc = q-q[id1]
 id2 = [np.argmin(np.abs(qc+lo)),np.argmin(np.abs(qc-lo))]
 ids = [id1]+id2
-#print(stars_r[mask][ids],stars_o[mask][ids],R[mask][ids])
+#print("ids:",ids)
+#print("R,O,V:",stars_r[mask][ids]*180*60/np.pi,stars_o[mask][ids]*180/np.pi,R[mask][ids])
+_probe_id = []
 for uid in np.where(mask0)[0][mask][ids]:
-    probe_id = np.argmin([stars.distanceFrom(Quantity(probe.local,'rad'),
-                                             star_idx=[uid],u='arcmin') \
-                          for probe in probes])
+    #print('UID:',uid)
+    dist = np.argsort(np.hstack([stars.distanceFrom(Quantity(probe.local,'rad'),
+                        star_idx=[uid],u='arcmin').value for probe in probes]))
+    for d in dist:
+        if not d in _probe_id:
+            probe_id = d
+            _probe_id += [probe_id]
+            break
+    #print("PID:",probe_id)
     probes[probe_id].gs_idx = uid
 @
 \end{enumerate}
