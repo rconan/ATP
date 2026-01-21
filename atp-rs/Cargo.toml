@@ -1,0 +1,52 @@
+[package]
+name = "atp-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["GMT AGWS Team"]
+description = "AGWS Target Practice - Guide star selection for GMT Acquisition, Guiding & Wavefront Sensing"
+
+[dependencies]
+# CEO integration (requires CUDA)
+crseo = "2.5"
+
+# Numerical/scientific
+ndarray = "0.16"
+nalgebra = "0.33"
+
+# Time handling
+hifitime = "4.0"
+chrono = "0.4"
+
+# Data handling
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+
+# Async HTTP for catalog queries
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Special functions (Bessel, Gamma)
+special = "0.11"
+
+# Random number generation
+rand = "0.8"
+
+[dev-dependencies]
+approx = "0.5"
+
+[features]
+default = []
+python = ["pyo3"]
+
+[dependencies.pyo3]
+version = "0.22"
+features = ["extension-module"]
+optional = true

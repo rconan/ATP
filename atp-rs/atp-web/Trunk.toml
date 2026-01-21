@@ -1,0 +1,44 @@
+[build]
+# The index HTML file to use
+target = "index.html"
+
+# The output directory for the build
+dist = "dist"
+
+# The public URL from which assets are served
+# public_url = "/"
+
+# Minify JS and CSS (on_release, always, or never)
+minify = "on_release"
+
+[watch]
+# Watch these paths for changes
+watch = ["src", "style"]
+
+# Ignore these paths
+ignore = ["dist"]
+
+[serve]
+# Addresses to serve on
+addresses = ["127.0.0.1"]
+
+# Port to serve on (default: 8080)
+port = 3000
+
+# Open browser on serve
+open = false
+
+# Enable WebSocket for hot reload
+ws_protocol = "ws"
+
+[[hooks]]
+# Copy CSS to output
+stage = "pre_build"
+command = "echo"
+command_arguments = ["Preparing ATP Web UI build..."]
+
+[[hooks]]
+# Post-build optimization
+stage = "post_build"
+command = "echo"
+command_arguments = ["Build complete! Output in dist/"]
