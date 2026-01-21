@@ -1,0 +1,68 @@
+Observation:
+  time scale: 'UTC'
+  time: '2018-01-01T04:00:00'
+  time resolution: [60,'second']
+  duration: [null,'second']
+Observatory:
+  latitude: [-29.049,'degree']
+  longitude:  [-70.682,'degree']
+  height: [2514,'meter']
+Target:  
+  pointing target: null
+  pointing ra/dec: null
+  pointing alt/az:
+    alt: [45,'degree']
+    az: [0,'degree']
+  pointing accuracy: null
+  rotator angle: [0,'degree']
+Star Catalog:
+  ra/dec error rms: null
+  radius: [10,'arcmin']
+  exclude radius: [3,'arcmin']
+  V magnitude limit: 18
+  color: [V,J]
+Telescope:
+  diameter: [25.5,'m']
+  area: 367 # m^2
+Atmosphere:
+  wavelength: [500,'nm']
+  r0: [16,'cm']
+  L0: [25,'m']
+  altitude: [[25, 275, 425, 1250, 4000, 8000, 13000],'m']
+  fr0: [0.1257, 0.0874, 0.0666, 0.3498, 0.2273, 0.0681, 0.0751]
+TT7:
+  guide star:
+    wavelength: [715,'nm']
+    zero point: !!float 24.46e9 # ph/m^2/s
+  optics:
+    lenslet:
+      array: 7
+      spot size: seeing limited
+      pixel scale: null
+      pixels: null
+    throughput: 0.48
+  detector:
+    exposure: [5,'ms']
+    quantum efficiency: 0.8
+    read-out noise: 0
+  control:
+    gain: 0
+    latency: 0
+SH:
+  guide star:
+    wavelength: [715,'nm']
+    zero point: !!float 24.46e9 # ph/m^2/s
+  optics:
+    lenslet:
+      array: 48
+      spot size: seeing limited
+      pixel scale: null
+      pixels: null
+    throughput: 0.48
+  detector:
+    exposure: [30,'s']
+    quantum efficiency: 0.8
+    read-out noise: 0
+  control:
+    gain: 0
+    latency: 0
